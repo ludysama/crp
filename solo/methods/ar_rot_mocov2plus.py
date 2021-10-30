@@ -104,6 +104,30 @@ def rotate_batch(batch, branch=4):
         batch = (_, [X[0].detach(), X[1].detach()], cls_label)
         return batch, [rot_X0.detach(), rot_X1.detach()], rot_label_r0.detach(), rot_label_r1.detach()
 
+    if branch == 6:
+        rot_label_r0 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r1 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r2 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r3 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        mask_r0 = torch.randperm(cls_label.shape[0])
+        mask_r1 = torch.randperm(cls_label.shape[0])
+        mask_r2 = torch.randperm(cls_label.shape[0])
+        mask_r3 = torch.randperm(cls_label.shape[0])
+        rot_label_r0 = rot_label_r0[mask_r0]
+        rot_label_r1 = rot_label_r1[mask_r1]
+        rot_label_r2 = rot_label_r0[mask_r2]
+        rot_label_r3 = rot_label_r1[mask_r3]
+        rot_X0 = rotate_tensors(X[2], rot_label_r0)
+        rot_X1 = rotate_tensors(X[3], rot_label_r1)
+        rot_X2 = rotate_tensors(X[4], rot_label_r2)
+        rot_X3 = rotate_tensors(X[5], rot_label_r3)
+        # rot_X0 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X0)
+        # rot_X1 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X1)
+        # added some detach
+        batch = (_, [X[0].detach(), X[1].detach()], cls_label)
+        return batch, [rot_X0.detach(), rot_X1.detach(), rot_X2.detach(), rot_X3.detach], \
+            [rot_label_r0.detach(), rot_label_r1.detach(), rot_label_r2.detach(), rot_label_r3.detach()]
+
 class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
     queue: torch.Tensor
     label_queue: torch.Tensor
@@ -169,7 +193,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         # relative rotation prediction settings
         self.r_rot_classifier = nn.Sequential(
                 nn.Linear(base_dim*2, proj_hidden_dim),
-                nn.Dropout(p=0.8),
+                # nn.Dropout(p=0.8),
                 # nn.BatchNorm1d(proj_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(proj_hidden_dim, 4)
@@ -500,6 +524,8 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             batch, rot_X, rot_label_r0, rot_label_r1 = rotate_batch(batch, branch=3)
         if branch == 4:
             batch, rot_Xs, rot_label_r0, rot_label_r1 = rotate_batch(batch, branch=4)
+        if branch == 6:
+            batch, rot_Xs, rot_labels = rotate_batch(batch, branch=6)
 
         # print(rot_label_r0[:4], rot_label_r1[:4])
         # check_imgs([batch[1][0], batch[1][1], rot_Xs[0], rot_Xs[1]])
@@ -548,6 +574,15 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 else:
                     feats_rot0 = self.encoder(rot_Xs[0])
                     feats_rot1 = self.encoder(rot_Xs[1])
+            elif branch == 6:
+                rot_label_r0 = rot_labels[0]
+                rot_label_r1 = rot_labels[1]
+                if get_locoal_features:
+                    feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[0])
+                    feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[1])
+                else:
+                    feats_rot0 = self.encoder(rot_Xs[0])
+                    feats_rot1 = self.encoder(rot_Xs[1])
 
             if do_global_rotation:
                 # 结合moco框架下不要用solo_gar分支
@@ -561,7 +596,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     # self.log("solo_gar_loss", solo_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
                     # self.log("solo_gar_acc1", solo_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 else:
-                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)
+                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=True, use_anti_weights=False)
                     gar_loss = dual_gar_loss
                     self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
                     self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
@@ -570,10 +605,10 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 self.log("dual_grr_loss", dual_grr_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_grr_acc1", dual_grr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 grr_loss = dual_grr_loss
-                if self.current_epoch < 1: 
+                if self.current_epoch < 1 and False: 
                     gr_loss = 0.6*gar_loss
                 else:
-                    gr_loss = 0.6*gar_loss + 0.05*grr_loss
+                    gr_loss = 0*gar_loss + 0.4*grr_loss
 
             if do_local_rotation:
                 dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)

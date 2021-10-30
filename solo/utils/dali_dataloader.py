@@ -552,6 +552,151 @@ class ModifiedImagenetTransform:
 
         return [x0, x1, x2, x3]
 
+class ModifiedImagenetTransform_6branch:
+    def __init__(
+        self,
+        device: str,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+        hue: float,
+        gaussian_prob: float = 0.5,
+        solarization_prob: float = 0.0,
+        size: int = 224,
+        min_scale: float = 0.08,
+        max_scale: float = 1.0,
+    ):
+        """Applies Imagenet transformations to a batch of images.
+
+        Args:
+            device (str): device on which the operations will be performed.
+            brightness (float): sampled uniformly in [max(0, 1 - brightness), 1 + brightness].
+            contrast (float): sampled uniformly in [max(0, 1 - contrast), 1 + contrast].
+            saturation (float): sampled uniformly in [max(0, 1 - saturation), 1 + saturation].
+            hue (float): sampled uniformly in [-hue, hue].
+            gaussian_prob (float, optional): probability of applying gaussian blur. Defaults to 0.5.
+            solarization_prob (float, optional): probability of applying solarization. Defaults
+                to 0.0.
+            size (int, optional): size of the side of the image after transformation. Defaults
+                to 224.
+            min_scale (float, optional): minimum scale of the crops. Defaults to 0.08.
+            max_scale (float, optional): maximum scale of the crops. Defaults to 1.0.
+        """
+        # random horizontal flip
+        self.random_horizontal_flip = RandomHorizontalFlip(prob=0.5, device=device)
+
+        # random vertical flip
+        self.random_vertical_flip = RandomVerticalFlip(prob=0.5, device=device)
+
+        # random crop
+        self.random_crop = ops.RandomResizedCrop(
+            device=device,
+            size=size,
+            random_area=(min_scale, max_scale),
+            interp_type=types.INTERP_CUBIC,
+        )
+
+        # random crop
+        self.crp_random_crop = ops.RandomResizedCrop(
+            device=device,
+            size=size,
+            random_area=(0.25, max_scale),
+            interp_type=types.INTERP_CUBIC,
+        )
+
+        # color jitter
+        self.random_color_jitter = RandomColorJitter(
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            hue=hue,
+            prob=0.8,
+            device=device,
+        )
+
+        # grayscale conversion
+        self.random_grayscale = RandomGrayScaleConversion(prob=0.2, device=device)
+
+        # gaussian blur
+        self.random_gaussian_blur = RandomGaussianBlur(prob=gaussian_prob, device=device)
+
+        # solarization
+        self.random_solarization = RandomSolarize(prob=solarization_prob)
+
+        # normalize
+        self.cmn = ops.CropMirrorNormalize(
+            device=device,
+            dtype=types.FLOAT,
+            output_layout=types.NCHW,
+            mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
+            std=[0.228 * 255, 0.224 * 255, 0.225 * 255],
+        )
+        self.coin05 = ops.random.CoinFlip(probability=0)
+
+        self.str = (
+            "ImagenetTransform("
+            f"random_horizontal_flip(0.5), "
+            f"random_crop({min_scale}, {max_scale}), "
+            f"random_color_jitter(brightness={brightness}, "
+            f"contrast={contrast}, saturation={saturation}, hue={hue}), "
+            f"random_gray_scale, random_gaussian_blur({gaussian_prob}), "
+            f"random_solarization({solarization_prob}), "
+            "crop_mirror_resize())"
+        )
+
+    def __str__(self) -> str:
+        return self.str
+
+    def __call__(self, images):
+        out0 = self.random_crop(images)
+        out0 = self.random_horizontal_flip(out0)
+        out1 = self.random_crop(images)
+        out1 = self.random_horizontal_flip(out1)
+        out23 = self.random_horizontal_flip(images)
+        out23 = self.crp_random_crop(out23)
+        out4 = self.random_crop(images)
+        out4 = self.random_horizontal_flip(out4)
+        out5 = self.random_crop(images)
+        out5 = self.random_horizontal_flip(out5)
+        
+        x0 = self.random_color_jitter(out0)
+        x0 = self.random_grayscale(x0)
+        x0 = self.random_gaussian_blur(x0)
+        x0 = self.random_solarization(x0)
+        x0 = self.cmn(x0, mirror=self.coin05())
+
+        x1 = self.random_color_jitter(out1)
+        x1 = self.random_grayscale(x1)
+        x1 = self.random_gaussian_blur(x1)
+        x1 = self.random_solarization(x1)
+        x1 = self.cmn(x1, mirror=self.coin05())
+
+        x2 = self.random_color_jitter(out23)
+        x2 = self.random_grayscale(x2)
+        x2 = self.random_gaussian_blur(x2)
+        x2 = self.random_solarization(x2)
+        x2 = self.cmn(x2, mirror=self.coin05())
+
+        x3 = self.random_color_jitter(out23)
+        x3 = self.random_grayscale(x3)
+        x3 = self.random_gaussian_blur(x3)
+        x3 = self.random_solarization(x3)
+        x3 = self.cmn(x3, mirror=self.coin05())
+
+        x4= self.random_color_jitter(out4)
+        x4 = self.random_grayscale(x4)
+        x4 = self.random_gaussian_blur(x4)
+        x4 = self.random_solarization(x4)
+        x4 = self.cmn(x4, mirror=self.coin05())
+
+        x5= self.random_color_jitter(out5)
+        x5 = self.random_grayscale(x5)
+        x5 = self.random_gaussian_blur(x5)
+        x5 = self.random_solarization(x5)
+        x5 = self.cmn(x5, mirror=self.coin05())
+
+        return [x0, x1, x2, x3, x4, x5]
+
 class CustomTransform:
     def __init__(
         self,

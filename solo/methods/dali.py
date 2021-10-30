@@ -29,6 +29,7 @@ from solo.utils.dali_dataloader import (
     CustomNormalPipeline,
     CustomTransform,
     ImagenetTransform,
+    ModifiedImagenetTransform_6branch,
     MulticropPretrainPipeline,
     NormalPipeline,
     PretrainPipeline,
@@ -165,7 +166,10 @@ class PretrainABC(ABC):
         dataset = self.extra_args["dataset"]
         if dataset in ["imagenet100", "imagenet"]:
             # transform_pipeline = ImagenetTransform
-            transform_pipeline = ModifiedImagenetTransform
+            if self.num_crops == 4:
+                transform_pipeline = ModifiedImagenetTransform
+            if self.num_crops == 6:
+                transform_pipeline = ModifiedImagenetTransform_6branch
         elif dataset == "custom":
             transform_pipeline = CustomTransform
         else:
