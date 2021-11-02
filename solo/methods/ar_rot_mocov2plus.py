@@ -651,7 +651,10 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     # self.log("solo_gar_loss", solo_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
                     # self.log("solo_gar_acc1", solo_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 else:
-                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=True, use_anti_weights=False)
+                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)
+                    '''
+                        注释？
+                    '''
                     gar_loss = dual_gar_loss
                     self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
                     self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
