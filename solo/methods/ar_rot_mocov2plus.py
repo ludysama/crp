@@ -99,35 +99,16 @@ def rotate_batch(batch, branch=4):
         rot_label_r1 = rot_label_r1[mask_r1]
         rot_X0 = rotate_tensors(X[2], rot_label_r0)
         rot_X1 = rotate_tensors(X[3], rot_label_r1)
-        ptimgs = [rot_X0[4:8].clone()]
-        # 下面代码rotation jittering的随机性不是独立的，同一个batch共享一个参数
+        # # 下面代码rotation jittering的随机性不是独立的，同一个batch共享一个参数
         with torch.no_grad():
             rot_X0 = transforms.RandomRotation(15)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
             rot_X0 = transforms.CenterCrop(192)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
             rot_X0 = transforms.Resize(224)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
             
             rot_X1 = transforms.RandomRotation(15)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
             rot_X1 = transforms.CenterCrop(192)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
             rot_X1 = transforms.Resize(224)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
-            # check_imgs(ptimgs)
 
-        # with torch.no_grad():
-        #     for i in range(rot_X0.shape[0]):
-        #         rot_X0[i] = transforms.RandomRotation(20)(rot_X0[i])
-        #         rot_X1[i] = transforms.RandomRotation(20)(rot_X1[i])
-        #     rot_X0 = transforms.CenterCrop(192)(rot_X0)
-        #     rot_X0 = transforms.Resize(224)(rot_X0)
-        #     rot_X1 = transforms.CenterCrop(192)(rot_X1)
-        #     rot_X1 = transforms.Resize(224)(rot_X1)
-
-        # rot_X0 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X0)
-        # rot_X1 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X1)
         # added some detach
         batch = (_, [X[0].detach(), X[1].detach()], cls_label)
         return batch, [rot_X0.detach(), rot_X1.detach()], rot_label_r0.detach(), rot_label_r1.detach()
@@ -621,19 +602,16 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         do_moco = False
 
         if do_rotate:
-            get_locoal_features = True
+            get_locoal_features = False
             feats_rot0 , dense_rot0, feats_rot1, dense_rot1 = None, None, None, None
 
             do_global_rotation = True
             do_local_rotation = False
             do_local_revolution = False
+            assert not (get_locoal_features and (do_local_revolution or do_local_rotation)), "local tasks can't be done without local features"
 
-            gr_loss = None
-            gar_loss = None
-            grr_loss = None
-            lr_loss = None
-            lar_loss = None
-            lrr_loss = None
+            gr_loss, gar_loss, grr_loss = None, None, None
+            lr_loss, lar_loss, lrr_loss = None, None, None
             lrv_loss = None
             rotation_loss = None
 
@@ -652,14 +630,14 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     feats_rot0 = self.encoder(rot_Xs[0])
                     feats_rot1 = self.encoder(rot_Xs[1])
             elif branch == 6:
-                rot_label_r0 = rot_labels[0]
-                rot_label_r1 = rot_labels[1]
+                rot_label_r0 = rot_labels[2]
+                rot_label_r1 = rot_labels[3]
                 if get_locoal_features:
-                    feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[0])
-                    feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[1])
+                    feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[2])
+                    feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[3])
                 else:
-                    feats_rot0 = self.encoder(rot_Xs[0])
-                    feats_rot1 = self.encoder(rot_Xs[1])
+                    feats_rot0 = self.encoder(rot_Xs[2])
+                    feats_rot1 = self.encoder(rot_Xs[3])
 
             if do_global_rotation:
                 # 结合moco框架下不要用solo_gar分支
@@ -685,9 +663,9 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 if self.current_epoch < 1 and False: 
                     gr_loss = 0.6*gar_loss
                 else:
-                    gr_loss = 0.4*gar_loss + 0.1*grr_loss
+                    # gr_loss = 0.4*gar_loss + 0.1*grr_loss
                     # gr_loss = 0*gar_loss + 0.04*grr_loss
-                    # gr_loss = 0.4*gar_loss + 0*grr_loss
+                    gr_loss = 1*gar_loss + 0*grr_loss
 
             if do_local_rotation:
                 dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=True, use_anti_weights=False)

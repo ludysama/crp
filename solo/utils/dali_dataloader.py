@@ -518,13 +518,52 @@ class ModifiedImagenetTransform_4Branch:
     def __str__(self) -> str:
         return self.str
 
+    # 这段代码batch中的2,3 生成的是对齐的crop
+    # def __call__(self, images):
+    #     out0 = self.random_crop(images)
+    #     out0 = self.random_horizontal_flip(out0)
+    #     out1 = self.random_crop(images)
+    #     out1 = self.random_horizontal_flip(out1)
+    #     out23 = self.random_horizontal_flip(images)
+    #     out23 = self.crp_random_crop(out23)
+
+        
+    #     x0 = self.random_color_jitter(out0)
+    #     x0 = self.random_grayscale(x0)
+    #     x0 = self.random_gaussian_blur(x0)
+    #     x0 = self.random_solarization(x0)
+    #     x0 = self.cmn(x0, mirror=self.coin05())
+
+    #     x1 = self.random_color_jitter(out1)
+    #     x1 = self.random_grayscale(x1)
+    #     x1 = self.random_gaussian_blur(x1)
+    #     x1 = self.random_solarization(x1)
+    #     x1 = self.cmn(x1, mirror=self.coin05())
+
+    #     x2 = self.random_color_jitter(out23)
+    #     x2 = self.random_grayscale(x2)
+    #     x2 = self.random_gaussian_blur(x2)
+    #     x2 = self.random_solarization(x2)
+    #     x2 = self.cmn(x2, mirror=self.coin05())
+
+    #     x3 = self.random_color_jitter(out23)
+    #     x3 = self.random_grayscale(x3)
+    #     x3 = self.random_gaussian_blur(x3)
+    #     x3 = self.random_solarization(x3)
+    #     x3 = self.cmn(x3, mirror=self.coin05())
+
+    #     return [x0, x1, x2, x3]
+
+    # 这段代码batch中的2,3 生成的是非对齐的crop，但享有相同的horizontal filp
     def __call__(self, images):
         out0 = self.random_crop(images)
         out0 = self.random_horizontal_flip(out0)
         out1 = self.random_crop(images)
         out1 = self.random_horizontal_flip(out1)
         out23 = self.random_horizontal_flip(images)
-        out23 = self.crp_random_crop(out23)
+        out2 = self.random_crop(out23)
+        out3 = self.random_crop(out23)
+
         
         x0 = self.random_color_jitter(out0)
         x0 = self.random_grayscale(x0)
@@ -538,19 +577,17 @@ class ModifiedImagenetTransform_4Branch:
         x1 = self.random_solarization(x1)
         x1 = self.cmn(x1, mirror=self.coin05())
 
-        x2 = self.random_color_jitter(out23)
+        x2 = self.random_color_jitter(out2)
         x2 = self.random_grayscale(x2)
         x2 = self.random_gaussian_blur(x2)
         x2 = self.random_solarization(x2)
         x2 = self.cmn(x2, mirror=self.coin05())
 
-        x3 = self.random_color_jitter(out23)
+        x3 = self.random_color_jitter(out3)
         x3 = self.random_grayscale(x3)
         x3 = self.random_gaussian_blur(x3)
         x3 = self.random_solarization(x3)
         x3 = self.cmn(x3, mirror=self.coin05())
-
-        
 
         return [x0, x1, x2, x3]
 
