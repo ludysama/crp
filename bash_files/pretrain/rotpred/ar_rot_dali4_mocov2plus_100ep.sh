@@ -13,7 +13,7 @@ python main_pretrain.py \
     --scheduler cosine \
     --lr 0.3 \
     --dali \
-    --num_crops 6 \
+    --num_crops 4 \
     --classifier_lr 0.3 \
     --weight_decay 1e-4 \
     --batch_size 128 \

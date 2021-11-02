@@ -423,7 +423,7 @@ class ImagenetTransform:
         return out
 
 
-class ModifiedImagenetTransform:
+class ModifiedImagenetTransform_4Branch:
     def __init__(
         self,
         device: str,
@@ -550,9 +550,11 @@ class ModifiedImagenetTransform:
         x3 = self.random_solarization(x3)
         x3 = self.cmn(x3, mirror=self.coin05())
 
+        
+
         return [x0, x1, x2, x3]
 
-class ModifiedImagenetTransform_6branch:
+class ModifiedImagenetTransform_6Branch:
     def __init__(
         self,
         device: str,

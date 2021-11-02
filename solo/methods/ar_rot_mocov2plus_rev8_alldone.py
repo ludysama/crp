@@ -18,7 +18,6 @@
 # DEALINGS IN THE SOFTWARE.
 
 import argparse
-from math import degrees
 from typing import Any, Dict, List, Sequence, Tuple
 
 import torch
@@ -99,35 +98,8 @@ def rotate_batch(batch, branch=4):
         rot_label_r1 = rot_label_r1[mask_r1]
         rot_X0 = rotate_tensors(X[2], rot_label_r0)
         rot_X1 = rotate_tensors(X[3], rot_label_r1)
-        ptimgs = [rot_X0[4:8].clone()]
-        # 下面代码rotation jittering的随机性不是独立的，同一个batch共享一个参数
-        with torch.no_grad():
-            rot_X0 = transforms.RandomRotation(15)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
-            rot_X0 = transforms.CenterCrop(192)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
-            rot_X0 = transforms.Resize(224)(rot_X0)
-            # ptimgs.append(rot_X0[4:8].clone())
-            
-            rot_X1 = transforms.RandomRotation(15)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
-            rot_X1 = transforms.CenterCrop(192)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
-            rot_X1 = transforms.Resize(224)(rot_X1)
-            # ptimgs.append(rot_X1[4:8].clone())
-            # check_imgs(ptimgs)
-
-        # with torch.no_grad():
-        #     for i in range(rot_X0.shape[0]):
-        #         rot_X0[i] = transforms.RandomRotation(20)(rot_X0[i])
-        #         rot_X1[i] = transforms.RandomRotation(20)(rot_X1[i])
-        #     rot_X0 = transforms.CenterCrop(192)(rot_X0)
-        #     rot_X0 = transforms.Resize(224)(rot_X0)
-        #     rot_X1 = transforms.CenterCrop(192)(rot_X1)
-        #     rot_X1 = transforms.Resize(224)(rot_X1)
-
-        # rot_X0 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X0)
-        # rot_X1 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X1)
+        rot_X0 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X0)
+        rot_X1 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X1)
         # added some detach
         batch = (_, [X[0].detach(), X[1].detach()], cls_label)
         return batch, [rot_X0.detach(), rot_X1.detach()], rot_label_r0.detach(), rot_label_r1.detach()
@@ -230,7 +202,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         self.dense_split = 7
         # self.encoder.dense_avgpool = nn.AdaptiveAvgPool2d((self.dense_split, self.dense_split))
 
-        self.dense_feats_dim = 128
+        self.dense_feats_dim = 8
 
         self.a_rev_classifier = nn.Sequential(
                 nn.Linear(self.dense_feats_dim*self.dense_split**2, proj_hidden_dim),
@@ -246,9 +218,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         self.queue = nn.functional.normalize(self.queue, dim=1)
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
         self.register_buffer("label_queue", torch.zeros(2, self.queue_size, dtype=torch.long))
-        # 注册公转的模板，在开始dense做多少切片确定以后，公转模板也就随之确定，此步骤放在预处理可节省计算时间
         self.register_buffer("rev_template", torch.LongTensor([[i for i in range(self.dense_split**2)] for j in range(4)]))
-        # 生成公转模板
         self.generate_rev_template()
 
     @staticmethod
@@ -450,7 +420,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         acc1 = accuracy_at_k(denses_rr_pred, dense_label, top_k=(1,))[0]
         return denses_rr_loss, acc1
 
-    def do_solo_lrv(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+    def do_dual_lrv(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
         """
         使用自身的公转特征0,1,2,3与自身0拼接
         """
@@ -459,19 +429,20 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         one_labels = torch.LongTensor([1]*denses[0].shape[0]).to(denses[0].device)
 
         for i in range(4):
-            # 特征的公转增广
             denses_rev1s.append(self.do_revolution(denses[0], (one_labels*i).detach(), (one_labels*0).detach()))
             denses_rev2s.append(self.do_revolution(denses[1], (one_labels*i).detach(), (one_labels*0).detach()))
         
         for i in range(4):
-            # 截取部分特征，节约计算量
             denses_rev1s[i] = denses_rev1s[i][:,:,:self.dense_feats_dim].reshape(denses_rev1s[i].shape[0],-1).clone()
             denses_rev2s[i] = denses_rev2s[i][:,:,:self.dense_feats_dim].reshape(denses_rev2s[i].shape[0],-1).clone()
         dense_rev1 = torch.cat(denses_rev1s, dim=0)
         dense_rev2 = torch.cat(denses_rev2s, dim=0)
-        # 没做公转增广的数据 公转标签==自身旋转标签
-        dense_rev_label1 = torch.cat([((rot_labels[0]+i)% 4).detach() for i in range(4)], dim=0)
-        dense_rev_label2 = torch.cat([((rot_labels[1]+i)% 4).detach() for i in range(4)], dim=0)
+        # 默认公转标签是0
+        dense_rev_label1 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
+        dense_rev_label2 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
+        # # 默认公转标签是自身旋转标签
+        # dense_rev_label1 = torch.cat([((rot_labels[0]+i)% 4).detach() for i in range(4)], dim=0)
+        # dense_rev_label2 = torch.cat([((rot_labels[1]+i)% 4).detach() for i in range(4)], dim=0)
 
         denses_rev_pred1 = self.a_rev_classifier(dense_rev1) # or create a new classifier?
         denses_rev_pred2 = self.a_rev_classifier(dense_rev2) # or create a new classifier?
@@ -487,56 +458,11 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             denses_rev_loss1 = anti_weights * denses_rev_loss1
             denses_rev_loss2 = anti_weights * denses_rev_loss2
 
-        # 两个solo分支loss，ACC1取平均
         denses_rev_loss = (denses_rev_loss1 +denses_rev_loss2).mean(dim=0) / 2
         acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
         return denses_rev_loss, acc1
 
-    def do_dual_lrv(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
-        """
-        使用自身的公转特征0,1,2,3与自身0拼接
-        逻辑没理清，占个位
-        """
-        # denses_rev1s = []
-        # denses_rev2s = []
-        # one_labels = torch.LongTensor([1]*denses[0].shape[0]).to(denses[0].device)
 
-        # for i in range(4):
-        #     denses_rev1s.append(self.do_revolution(denses[0], (one_labels*i).detach(), (one_labels*0).detach()))
-        #     denses_rev2s.append(self.do_revolution(denses[1], (one_labels*i).detach(), (one_labels*0).detach()))
-        
-        # for i in range(4):
-        #     denses_rev1s[i] = denses_rev1s[i][:,:,:self.dense_feats_dim].reshape(denses_rev1s[i].shape[0],-1).clone()
-        #     denses_rev2s[i] = denses_rev2s[i][:,:,:self.dense_feats_dim].reshape(denses_rev2s[i].shape[0],-1).clone()
-        # dense_rev1 = torch.cat(denses_rev1s, dim=0)
-        # dense_rev2 = torch.cat(denses_rev2s, dim=0)
-        # # 默认公转标签是0
-        # # dense_rev_label1 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
-        # # dense_rev_label2 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
-        # # # 默认公转标签是自身旋转标签
-        # dense_rev_label1 = torch.cat([((rot_labels[0]+i)% 4).detach() for i in range(4)], dim=0)
-        # dense_rev_label2 = torch.cat([((rot_labels[1]+i)% 4).detach() for i in range(4)], dim=0)
-
-        # denses_rev_pred1 = self.a_rev_classifier(dense_rev1) # or create a new classifier?
-        # denses_rev_pred2 = self.a_rev_classifier(dense_rev2) # or create a new classifier?
-        # denses_rev_loss1 = F.cross_entropy(denses_rev_pred1, dense_rev_label1, reduction='none')
-        # denses_rev_loss2 = F.cross_entropy(denses_rev_pred2, dense_rev_label2, reduction='none')
-        # if use_entropy:
-        #     h1 = self.calc_entropy(denses_rev_pred1.detach(), 4)
-        #     h2 = self.calc_entropy(denses_rev_pred2.detach(), 4)
-        #     denses_rev_loss1 = h1 * denses_rev_loss1
-        #     denses_rev_loss2 = h2 * denses_rev_loss2
-        # if use_anti_weights:
-        #     anti_weights = 1 - self.current_epoch / self.max_epochs
-        #     denses_rev_loss1 = anti_weights * denses_rev_loss1
-        #     denses_rev_loss2 = anti_weights * denses_rev_loss2
-
-        # denses_rev_loss = (denses_rev_loss1 +denses_rev_loss2).mean(dim=0) / 2
-        # acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
-        # return denses_rev_loss, acc1
-
-
-    # 计算预测熵，此处只衡量模型对预测的自信程度，不考虑预测的准确性
     @torch.no_grad()
     def calc_entropy(self, pred:torch.Tensor, cls_dim:int, temperature:float=0.1, scale:float=5.0, low:float=0.01) -> torch.Tensor:
         # parameters warmup
@@ -556,7 +482,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         h = (actual_scale-actual_low) * (1-h) + actual_low
         return h
 
-    # 输出global级别和local级别特征的前向传播
     def dense_forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder.conv1(x)
         x = self.encoder.bn1(x)
@@ -591,10 +516,9 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             torch.Tensor: total loss composed of MOCO loss and classification loss.
 
         """
+        # 将输入数据做旋转
 
         # check_imgs([batch[1][0], batch[1][2], batch[1][3]])
-
-        # 将输入数据做旋转
         branch = 4
         if branch == 3:
             batch, rot_X, rot_label_r0, rot_label_r1 = rotate_batch(batch, branch=3)
@@ -603,11 +527,10 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         if branch == 6:
             batch, rot_Xs, rot_labels = rotate_batch(batch, branch=6)
 
-        # 检查输入数据，使用检查代码时需要在MobaXterm里跑
         # print(rot_label_r0[:4], rot_label_r1[:4])
         # check_imgs([batch[1][0], batch[1][1], rot_Xs[0], rot_Xs[1]])
         
-        # 欺骗moco的基本模型，使得可以继承solo-learn作者写的主框架
+        # cheat the base model
         self.num_crops = 2
         
         out = super().training_step(batch, batch_idx)
@@ -685,12 +608,10 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 if self.current_epoch < 1 and False: 
                     gr_loss = 0.6*gar_loss
                 else:
-                    gr_loss = 0.4*gar_loss + 0.1*grr_loss
-                    # gr_loss = 0*gar_loss + 0.04*grr_loss
-                    # gr_loss = 0.4*gar_loss + 0*grr_loss
+                    gr_loss = 0.4*gar_loss + 0.4*grr_loss
 
             if do_local_rotation:
-                dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=True, use_anti_weights=False)
+                dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
                 self.log("dual_lar_loss", dual_lar_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lar_acc1", dual_lar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lar_loss = dual_lar_loss
@@ -700,12 +621,12 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 self.log("dual_lrr_acc1", dual_lrr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lrr_loss = dual_lrr_loss
 
-                lr_loss = 0.4*lar_loss + 0.1*lrr_loss
+                lr_loss = lar_loss + lrr_loss
                 # lr_loss = lar_loss
-                # lr_loss = 0.1*lrr_loss
+                # lr_loss = lrr_loss
 
             if do_local_revolution:
-                dual_larv_loss, dual_larv_acc1 = self.do_solo_lrv([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
+                dual_larv_loss, dual_larv_acc1 = self.do_dual_lrv([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
                 self.log("dual_lrv_loss", dual_larv_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lrv_acc1", dual_larv_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lrv_loss = dual_larv_loss
@@ -744,8 +665,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             # symmetric
             queue = self.queue.clone().detach()
             
-            # 3分支下，moco分支带有旋转特征，可以参加正反例划分
-            if branch == 3: 
+            if branch == 3:
                 label_queue = self.label_queue.clone().detach()
                 nce_loss = (rot_based_moco_loss_func(q1, k2, queue[1], label_queue[1], rot_label_r1, self.temperature) + 
                             rot_based_moco_loss_func(q2, k1, queue[0], label_queue[0], rot_label_r1, self.temperature)) / 2
@@ -754,7 +674,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 keys = torch.stack((gather(k1), gather(k2)))
                 self._dequeue_and_enqueue(keys, rot_labels=queue_rot_labels)
 
-            # 4分支下，moco分支中不引入旋转特征，使用原版的moco_loss即可
             elif branch == 4:
                 nce_loss = (
                     moco_loss_func(q1, k2, queue[1], self.temperature)
@@ -764,11 +683,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 keys = torch.stack((gather(k1), gather(k2)))
                 self._dequeue_and_enqueue(keys)
 
-            # 解决一开始loss为nan的临时措施
-            if self.current_epoch > 1 and False:
-                total_loss = total_loss + nce_loss
-            else:
-                total_loss = total_loss + 1*nce_loss
+            total_loss = total_loss + nce_loss
 
             self.log("train_nce_loss", nce_loss, on_epoch=True, on_step=False, sync_dist=True)
 
