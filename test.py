@@ -1,4 +1,4 @@
-from numpy import printoptions
+from numpy import degrees, printoptions
 import torch
 import torch.nn.functional as F
 # ls = [-1,0,1,2,3,4]
@@ -48,50 +48,73 @@ import torch.nn.functional as F
 # print(rot_label2)
 # print(relative_label)
 
-def rotated_loc_code(loccode:int, degree:int, split:int, mode:str = 'normal')->int:
-    '''
-        if split == 2:
-        then the code is 0 1            if degree == 1 then 1 3
-                            2 3                                0 2
-        if split == 3:
-        then the code is 0 1 2
-                            3 4 5
-                            6 7 8
-        if split == 4:
-        then the code is 0  1  2  3     if degree == 1 then 3  7  11 15
-                            4  5  6  7                         2  6  10 14
-                            8  9  10 11                        1  5  9  13
-                            12 13 14 15                        0  4  8  12
-    '''
-    if mode == 'counter':
-        degree = (4 - degree) % 4
+# def rotated_loc_code(loccode:int, degree:int, split:int, mode:str = 'normal')->int:
+#     '''
+#         if split == 2:
+#         then the code is 0 1            if degree == 1 then 1 3
+#                             2 3                                0 2
+#         if split == 3:
+#         then the code is 0 1 2
+#                             3 4 5
+#                             6 7 8
+#         if split == 4:
+#         then the code is 0  1  2  3     if degree == 1 then 3  7  11 15
+#                             4  5  6  7                         2  6  10 14
+#                             8  9  10 11                        1  5  9  13
+#                             12 13 14 15                        0  4  8  12
+#     '''
+#     if mode == 'counter':
+#         degree = (4 - degree) % 4
 
-    for i in range(degree):
-        code_row = loccode // split
-        code_collumn = loccode % split
-        code_row_new = code_collumn
-        code_collumn_new = split - code_row -1
-        loccode = code_row_new * split + code_collumn_new
+#     for i in range(degree):
+#         code_row = loccode // split
+#         code_collumn = loccode % split
+#         code_row_new = code_collumn
+#         code_collumn_new = split - code_row -1
+#         loccode = code_row_new * split + code_collumn_new
         
-    return loccode
-dense_split = 3
-template = torch.LongTensor([[i for i in range(dense_split**2)] for j in range(4)])
-print(template)
+#     return loccode
+# dense_split = 3
+# template = torch.LongTensor([[i for i in range(dense_split**2)] for j in range(4)])
+# print(template)
 
-for i in range(1,4):
-    for j in range(dense_split**2):
-        template[i][j] = rotated_loc_code(j,i,dense_split)
-print(template)
+# for i in range(1,4):
+#     for j in range(dense_split**2):
+#         template[i][j] = rotated_loc_code(j,i,dense_split)
+# print(template)
 
-res = torch.LongTensor([0,1,2,3,0,1,2,3])[torch.randperm(8)]
-x = torch.randn((8,9,3))
+# res = torch.LongTensor([0,1,2,3,0,1,2,3])[torch.randperm(8)]
+# x = torch.randn((8,9,3))
+# print(x)
+# print(res)
+# # x = x.permute(0,2,1)
+# # x = x[:,[2,5,8,1,4,7,0,3,6],:]
+# for i in range(4):
+#     x[res==i] = x[res==i][:,template[i],:]
+# print(x)
+
+# dense_label1 = torch.stack([res.clone() for j in range(3**2)], dim=0)
+# print(dense_label1)
+
+x = torch.randn((2,3),requires_grad=True)
+y = torch.randn((2,3),requires_grad=True)
 print(x)
-print(res)
-# x = x.permute(0,2,1)
-# x = x[:,[2,5,8,1,4,7,0,3,6],:]
-for i in range(4):
-    x[res==i] = x[res==i][:,template[i],:]
+print(y)
+xcaty = torch.cat((x,y),dim=1)
+ycatx = torch.cat((y,x),dim=1)
+print(xcaty)
+print(ycatx)
+xcaty= 2.1 * xcaty
 print(x)
+print(y)
+print(xcaty)
+print(ycatx)
 
-dense_label1 = torch.stack([res.clone() for j in range(3**2)], dim=0)
-print(dense_label1)
+print(xcaty.grad_fn)
+print(ycatx.grad_fn)
+
+print(xcaty.detach().grad_fn)
+print(ycatx.detach().grad_fn)
+
+print(xcaty.grad_fn)
+print(ycatx.grad_fn)

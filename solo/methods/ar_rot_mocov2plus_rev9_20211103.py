@@ -34,9 +34,7 @@ from solo.utils.metrics import accuracy_at_k
 from solo.utils.misc import gather
 
 def check_imgs(X:torch.Tensor) -> None:
-    '''
-    检查输入数据的方法
-    '''
+    
     class Denormalize(object):
         def __init__(self, mean, std):
             self.mean = mean
@@ -353,44 +351,34 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         acc1 = accuracy_at_k(ar_pred, rot_label, top_k=(1,))[0]
         return ar_loss, acc1
     
-    def do_dual_gar(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False) -> torch.Tensor:
-        feats_cat1 = torch.cat((feats[0], feats[1]), dim=1)
-        feats_cat2 = torch.cat((feats[1], feats[0]), dim=1)
-        ar_pred1 = self.a_rot_classifier(feats_cat1)
-        joint_rot_label1 = (rot_labels[0]*4 + rot_labels[1]).detach()
-        ar_pred2 = self.a_rot_classifier(feats_cat2)
-        joint_rot_label2 = (rot_labels[1]*4 + rot_labels[0]).detach()
-        ar_loss1 = F.cross_entropy(ar_pred1, joint_rot_label1, reduction='none')
-        ar_loss2 = F.cross_entropy(ar_pred2, joint_rot_label2, reduction='none')
+    def do_dual_gar(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+        feats_cat = torch.cat((feats[0], feats[1]), dim=1)
+        ar_pred = self.a_rot_classifier(feats_cat)
+        joint_rot_label = rot_labels[0]*4 + rot_labels[1]
+        ar_loss = F.cross_entropy(ar_pred, joint_rot_label, reduction='none')
         if use_entropy:
-            h1 = self.calc_entropy(ar_pred1.detach(), 16)
-            ar_loss1 = h1 * ar_loss1
-            h2 = self.calc_entropy(ar_pred2.detach(), 16)
-            ar_loss1 = h2 * ar_loss2
-        ar_loss = (ar_loss1.mean(dim=0) + ar_loss2.mean(dim=0)) / 2
-        acc1_1 = accuracy_at_k(ar_pred1, joint_rot_label1,top_k=(1,))[0]
-        acc1_2 = accuracy_at_k(ar_pred2, joint_rot_label2,top_k=(1,))[0]
-        acc1 = (acc1_1 + acc1_2) / 2
+            h = self.calc_entropy(ar_pred.detach(), 16)
+            ar_loss = h * ar_loss
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            ar_loss = anti_weights * ar_loss
+
+        ar_loss = ar_loss.mean(dim=0)
+        acc1 = accuracy_at_k(ar_pred, joint_rot_label,top_k=(1,))[0]
         return ar_loss, acc1
 
-    def do_dual_grr(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False) -> torch.Tensor:
-        feats_cat1 = torch.cat((feats[0], feats[1]), dim=1)
-        feats_cat2 = torch.cat((feats[1], feats[0]), dim=1)
-        rr_pred1 = self.r_rot_classifier(feats_cat1)
-        joint_rot_label1 = ((rot_labels[1]-rot_labels[0]) % 4).detach()
-        rr_pred2 = self.r_rot_classifier(feats_cat2)
-        joint_rot_label2 = ((rot_labels[0]-rot_labels[1]) % 4).detach()
-        rr_loss1 = F.cross_entropy(rr_pred1, joint_rot_label1, reduction='none')
-        rr_loss2 = F.cross_entropy(rr_pred2, joint_rot_label2, reduction='none')
+    def do_dual_grr(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+        feats_cat = torch.cat((feats[0],feats[1]), dim=1)
+        rr_pred = self.r_rot_classifier(feats_cat)
+        rr_loss = F.cross_entropy(rr_pred, (rot_labels[1]-rot_labels[0])%4, reduction='none')
         if use_entropy:
-            h1 = self.calc_entropy(rr_pred1.detach(), 4)
-            rr_loss1 = h1 * rr_loss1
-            h2 = self.calc_entropy(rr_pred2.detach(), 4)
-            rr_loss1 = h2 * rr_loss2
-        rr_loss = (rr_loss1.mean(dim=0) + rr_loss2.mean(dim=0)) / 2
-        acc1_1 = accuracy_at_k(rr_pred1, joint_rot_label1,top_k=(1,))[0]
-        acc1_2 = accuracy_at_k(rr_pred2, joint_rot_label2,top_k=(1,))[0]
-        acc1 = (acc1_1 + acc1_2) / 2
+            h = self.calc_entropy(rr_pred.detach(), 4)
+            rr_loss = h * rr_loss
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            rr_loss = anti_weights * rr_loss
+        rr_loss = rr_loss.mean(dim=0)
+        acc1 = accuracy_at_k(rr_pred, (rot_labels[1]-rot_labels[0])%4, top_k=(1,))[0]
         return rr_loss, acc1
 
     def do_dual_lar(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
@@ -547,7 +535,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         p = p.softmax(dim=1)
         h = torch.sum(-p * torch.log(p + 1e-4), dim=1) / bit_dim
         h = (actual_scale-actual_low) * (1-h) + actual_low
-        
         return h
 
     # 输出global级别和local级别特征的前向传播
@@ -627,9 +614,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             lr_loss, lar_loss, lrr_loss = None, None, None
             lrv_loss = None
             rotation_loss = None
-            """
-                为模块提供特征的中间件
-            """
+
             if branch == 3: 
                 if get_locoal_features:
                     feats_rot0, dense_rot0 = self.dense_forward(rot_X)
@@ -655,19 +640,29 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     feats_rot1 = self.encoder(rot_Xs[3])
 
             if do_global_rotation:
-                """
-                    全局旋转模块
-                """
-                dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False)
-                gar_loss = dual_gar_loss
-                self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
-                self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
+                # 结合moco框架下不要用solo_gar分支
+                if self.solo_gar:
+                    assert False, "don't use solo_gar in current version"
+                    # solo_gar_loss_0, solo_gar_acc1_0 = self.do_solo_gar(feats_rot0, rot_label_r, use_entropy=False, use_anti_weights=False)
+                    # solo_gar_loss_1, solo_gar_acc1_1 = self.do_solo_gar(feats_rot1, rot_label_m, use_entropy=False, use_anti_weights=False)
+                    # solo_gar_loss = (solo_gar_loss_0 + solo_gar_loss_1) / 2
+                    # solo_gar_acc1 = (solo_gar_acc1_0 + solo_gar_acc1_1) / 2
+                    # gar_loss = solo_gar_loss
+                    # self.log("solo_gar_loss", solo_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
+                    # self.log("solo_gar_acc1", solo_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
+                else:
+                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)
+                    '''
+                        注释？
+                    '''
+                    gar_loss = dual_gar_loss
+                    self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
+                    self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 
-                dual_grr_loss, dual_grr_acc1 = self.do_dual_grr([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False)    
+                dual_grr_loss, dual_grr_acc1 = self.do_dual_grr([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)    
                 self.log("dual_grr_loss", dual_grr_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_grr_acc1", dual_grr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 grr_loss = dual_grr_loss
-
                 if self.current_epoch < 3 and False: 
                     gr_loss = 0.01*gar_loss + 0.25*grr_loss
                 else:
@@ -676,9 +671,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     gr_loss = 0*gar_loss + 0.25*grr_loss
 
             if do_local_rotation:
-                """
-                    局部自转模块
-                """
                 dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=True, use_anti_weights=False)
                 self.log("dual_lar_loss", dual_lar_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lar_acc1", dual_lar_acc1, on_epoch=True, on_step=False, sync_dist=True)
@@ -694,9 +686,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 lr_loss = 1*lrr_loss
 
             if do_local_revolution:
-                """
-                    公转模块
-                """
                 dual_larv_loss, dual_larv_acc1 = self.do_solo_lrv([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
                 self.log("dual_lrv_loss", dual_larv_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lrv_acc1", dual_larv_acc1, on_epoch=True, on_step=False, sync_dist=True)
