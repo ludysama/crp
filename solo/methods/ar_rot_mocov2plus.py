@@ -671,9 +671,9 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 if self.current_epoch < 3 and False: 
                     gr_loss = 0.01*gar_loss + 0.25*grr_loss
                 else:
-                    # gr_loss = 0.4*gar_loss + 0.1*grr_loss
+                    gr_loss = 0.5*gar_loss + 0*grr_loss
                     # gr_loss = 0*gar_loss + 0.04*grr_loss
-                    gr_loss = 0*gar_loss + 0.25*grr_loss
+                    # gr_loss = 0*gar_loss + 0.25*grr_loss
 
             if do_local_rotation:
                 """
