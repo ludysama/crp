@@ -366,7 +366,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         acc1 = (acc1_1 + acc1_2) / 2
         return rr_loss, acc1
 
-    def do_dual_lar(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+    def do_dual_lar(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, topK_tpye='entropy', topk=1) -> torch.Tensor:
         '''
             双分支局部绝对旋转模块
         '''
@@ -387,14 +387,17 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         if use_entropy:
             h = self.calc_entropy(denses_ar_pred.detach(), 16)
             denses_ar_loss = h * denses_ar_loss
-        if use_anti_weights:
-            anti_weights = 1 - self.current_epoch / self.max_epochs
-            denses_ar_loss = anti_weights * denses_ar_loss
-        denses_ar_loss = denses_ar_loss.mean(dim=0) / self.dense_split**2
+            ori_h = h.clone().reshape(denses[0].shape[0],denses[0].shape[1])
+            index_h = ori_h.topk(topk)[1]
+            index_h_sup = torch.LongTensor([[i*ori_h.shape[1] for j in range(index_h.shape[1])] for i in range(ori_h.shape[0])]).to(index_h.device)
+            index_h = index_h + index_h_sup
+            denses_ar_loss = torch.take(denses_ar_loss, index_h).mean(dim=-1)
+        
+        denses_ar_loss = denses_ar_loss.mean(dim=0)
         acc1 = accuracy_at_k(denses_ar_pred, dense_label, top_k=(1,))[0]
         return denses_ar_loss, acc1
 
-    def do_dual_lrr(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+    def do_dual_lrr(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False) -> torch.Tensor:
         '''
             双分支局部相对旋转模块
         '''
@@ -415,10 +418,9 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         if use_entropy:
             h = self.calc_entropy(denses_rr_pred.detach(), 4)
             denses_rr_loss = h * denses_rr_loss
-        if use_anti_weights:
-            anti_weights = 1 - self.current_epoch / self.max_epochs
-            denses_rr_loss = anti_weights * denses_rr_loss
-        denses_rr_loss = denses_rr_loss.mean(dim=0) / self.dense_split**2
+
+        # denses_rr_loss = denses_rr_loss.mean(dim=0) / self.dense_split**2
+        denses_rr_loss = denses_rr_loss.mean(dim=0)
         acc1 = accuracy_at_k(denses_rr_pred, dense_label, top_k=(1,))[0]
         return denses_rr_loss, acc1
 
@@ -641,11 +643,11 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         do_moco = False
 
         if do_rotate:
-            get_locoal_features = False
+            get_locoal_features = True
             feats_rot0 , dense_rot0, feats_rot1, dense_rot1 = None, None, None, None
 
-            do_global_rotation = True
-            do_local_rotation = False
+            do_global_rotation = False
+            do_local_rotation = True
             do_local_revolution = False
             assert not (get_locoal_features ^ (do_local_revolution or do_local_rotation)), "local tasks can't be done without local features"
 
@@ -696,19 +698,22 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 """
                     局部自转模块
                 """
-                dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=True, use_anti_weights=False)
+                dual_lar_loss1, dual_lar_acc11 = self.do_dual_lar([dense_rot0.clone(), dense_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=True, topk=25)
+                dual_lar_loss2, dual_lar_acc12 = self.do_dual_lar([dense_rot1.clone(), dense_rot0.clone()], [rot_label_r1.clone(), rot_label_r0.clone()], use_entropy=True, topk=25)
+                dual_lar_loss = (dual_lar_loss1 + dual_lar_loss2)/2
+                dual_lar_acc1 = (dual_lar_acc11 + dual_lar_acc12)/2
                 self.log("dual_lar_loss", dual_lar_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lar_acc1", dual_lar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lar_loss = dual_lar_loss
 
-                dual_lrr_loss, dual_lrr_acc1 = self.do_dual_lrr([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
+                dual_lrr_loss, dual_lrr_acc1 = self.do_dual_lrr([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False)
                 self.log("dual_lrr_loss", dual_lrr_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lrr_acc1", dual_lrr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lrr_loss = dual_lrr_loss
 
                 # lr_loss = 0.4*lar_loss + 0.1*lrr_loss
                 # lr_loss = lar_loss
-                lr_loss = 1*lrr_loss
+                lr_loss = 0.5*lar_loss + 0*lrr_loss
 
             if do_local_revolution:
                 """

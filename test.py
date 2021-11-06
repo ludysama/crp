@@ -96,25 +96,37 @@ import torch.nn.functional as F
 # dense_label1 = torch.stack([res.clone() for j in range(3**2)], dim=0)
 # print(dense_label1)
 
-x = torch.randn((2,3),requires_grad=True)
-y = torch.randn((2,3),requires_grad=True)
+# x = torch.randn((2,3),requires_grad=True)
+# y = torch.randn((2,3),requires_grad=True)
+# print(x)
+# print(y)
+# xcaty = torch.cat((x,y),dim=1)
+# ycatx = torch.cat((y,x),dim=1)
+# print(xcaty)
+# print(ycatx)
+# xcaty= 2.1 * xcaty
+# print(x)
+# print(y)
+# print(xcaty)
+# print(ycatx)
+
+# print(xcaty.grad_fn)
+# print(ycatx.grad_fn)
+
+# print(xcaty.detach().grad_fn)
+# print(ycatx.detach().grad_fn)
+
+# print(xcaty.grad_fn)
+# print(ycatx.grad_fn)
+
+x = torch.randn((2,4))
+y = torch.LongTensor([[0,1,2],[1,2,3]])
 print(x)
 print(y)
-xcaty = torch.cat((x,y),dim=1)
-ycatx = torch.cat((y,x),dim=1)
-print(xcaty)
-print(ycatx)
-xcaty= 2.1 * xcaty
-print(x)
+yadd = torch.LongTensor([[i*y.shape[1] for j in range(y.shape[1])] for i in range(y.shape[0])])
+print(yadd)
+
+y = y + yadd
 print(y)
-print(xcaty)
-print(ycatx)
-
-print(xcaty.grad_fn)
-print(ycatx.grad_fn)
-
-print(xcaty.detach().grad_fn)
-print(ycatx.detach().grad_fn)
-
-print(xcaty.grad_fn)
-print(ycatx.grad_fn)
+xsel = torch.take(x,y)
+print(xsel)
