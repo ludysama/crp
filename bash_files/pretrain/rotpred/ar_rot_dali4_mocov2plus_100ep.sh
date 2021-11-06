@@ -33,4 +33,18 @@ python main_pretrain.py \
     --temperature 0.2 \
     --base_tau_momentum 0.99 \
     --final_tau_momentum 0.999 \
-    --momentum_classifier
+    --momentum_classifier \
+    --do_moco False \
+    --do_rotatation True \
+    --gar_weight 0 \
+    --use_entropy_gar True \
+    --grr_weight 0 \
+    --lar_weight 0.5 \
+    --use_entropy_lar True \
+    --dense_split 7 \
+    --dense_feats_dim 128\
+    --lrot_topk 25 \
+    --lrr_weight 0 \
+    --arev_weight 0 \
+    --rrev_weight 0 \
+    --use_entropy_arev True \
