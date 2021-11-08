@@ -641,12 +641,12 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         do_moco = False
 
         if do_rotate:
-            get_locoal_features = True
+            get_locoal_features = False
             feats_rot0 , dense_rot0, feats_rot1, dense_rot1 = None, None, None, None
 
-            do_global_rotation = False
+            do_global_rotation = True
             do_local_rotation = False
-            do_local_revolution = True
+            do_local_revolution = False
             assert not (get_locoal_features ^ (do_local_revolution or do_local_rotation)), "local tasks can't be done without local features"
 
             gr_loss, gar_loss, grr_loss = None, None, None
@@ -688,7 +688,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 if self.current_epoch < 3 and False: 
                     gr_loss = 0.01*gar_loss + 0.25*grr_loss
                 else:
-                    gr_loss = 0.5*gar_loss + 0*grr_loss
+                    gr_loss = 0.5*gar_loss + 0.5*grr_loss
                     # gr_loss = 0*gar_loss + 0.04*grr_loss
                     # gr_loss = 0*gar_loss + 0.25*grr_loss
 
@@ -724,7 +724,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 self.log("dual_rrev_acc1", dual_rrev_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 rrev_loss = dual_rrev_loss
 
-                rev_loss = arev_loss + 0*rrev_loss
+                rev_loss = 0*arev_loss + 1*rrev_loss
 
             if gr_loss != None:
                 if rotation_loss == None:

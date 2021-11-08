@@ -23,6 +23,7 @@ from solo.methods.byol import BYOL
 from solo.methods.deepclusterv2 import DeepClusterV2
 from solo.methods.dino import DINO
 from solo.methods.linear import LinearModel
+from solo.methods.ls_vicreg import LittleSeven_VICReg
 from solo.methods.mocov2plus import MoCoV2Plus
 from solo.methods.nnbyol import NNBYOL
 from solo.methods.nnclr import NNCLR
@@ -34,6 +35,7 @@ from solo.methods.swav import SwAV
 from solo.methods.vicreg import VICReg
 from solo.methods.wmse import WMSE
 from solo.methods.ar_rot_mocov2plus import AR_Rotation_MoCoV2Plus
+from solo.methods.ls_vicreg import LittleSeven_VICReg
 
 METHODS = {
     # base classes
@@ -55,6 +57,7 @@ METHODS = {
     "vicreg": VICReg,
     "wmse": WMSE,
     "ar_rot_mocov2plus": AR_Rotation_MoCoV2Plus,
+    "ls_vicreg": LittleSeven_VICReg,
 }
 __all__ = [
     "BarlowTwins",
@@ -73,7 +76,8 @@ __all__ = [
     "SwAV",
     "VICReg",
     "WMSE",
-    "AR_Rotation_MoCoV2Plus"
+    "AR_Rotation_MoCoV2Plus",
+    "LittleSeven_VICReg"
 ]
 
 try:
