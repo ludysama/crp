@@ -103,14 +103,14 @@ def rotate_batch(batch, branch=4):
         rot_X0 = rotate_tensors(X[2], rot_label_r0)
         rot_X1 = rotate_tensors(X[3], rot_label_r1)
         # # 下面代码rotation jittering的随机性不是独立的，同一个batch共享一个参数
-        with torch.no_grad():
-            rot_X0 = transforms.RandomRotation(15)(rot_X0)
-            rot_X0 = transforms.CenterCrop(192)(rot_X0)
-            rot_X0 = transforms.Resize(224)(rot_X0)
+        # with torch.no_grad():
+        #     rot_X0 = transforms.RandomRotation(3)(rot_X0)
+        #     rot_X0 = transforms.CenterCrop(192)(rot_X0)
+        #     rot_X0 = transforms.Resize(224)(rot_X0)
             
-            rot_X1 = transforms.RandomRotation(15)(rot_X1)
-            rot_X1 = transforms.CenterCrop(192)(rot_X1)
-            rot_X1 = transforms.Resize(224)(rot_X1)
+        #     rot_X1 = transforms.RandomRotation(3)(rot_X1)
+        #     rot_X1 = transforms.CenterCrop(192)(rot_X1)
+        #     rot_X1 = transforms.Resize(224)(rot_X1)
 
         # added some detach
         batch = (_, [X[0].detach(), X[1].detach()], cls_label)
@@ -127,11 +127,11 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         proj_hidden_dim: int,
         temperature: float,
         queue_size: int,
-        do_moco: bool,
-        do_rotatation: bool,
-        use_entropy_gar:bool,
-        use_entropy_lar:bool,
-        use_entropy_arev:bool,
+        moco_weight: bool,
+        rotation_weight: bool,
+        use_entropy_gar:int,
+        use_entropy_lar:int,
+        use_entropy_arev:int,
         dense_split: int,
         dense_feats_dim: int,
         gar_weight: float,
@@ -156,8 +156,8 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
 
         self.temperature = temperature
         self.queue_size = queue_size
-        self.do_moco = do_moco
-        self.do_rotatation = do_rotatation
+        self.moco_weight = moco_weight
+        self.rotation_weight = rotation_weight
         self.use_entropy_gar = use_entropy_gar
         self.use_entropy_lar = use_entropy_lar
         self.use_entropy_arev = use_entropy_arev
@@ -240,20 +240,20 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         parser.add_argument("--queue_size", default=65536, type=int)
 
         # rotation module settings
-        parser.add_argument("do_moco", default=True, type=bool)
-        parser.add_argument("do_rotatation", default=True, type=bool)
-        parser.add_argument("use_entropy_gar", default=True, type=bool)
-        parser.add_argument("use_entropy_lar", default=True, type=bool)
-        parser.add_argument("use_entropy_arev", default=True, type=bool)
-        parser.add_argument("dense_split", default=7, type=int)
-        parser.add_argument("dense_feats_dim", default=128, type=int)
-        parser.add_argument("gar_weight", default=0.5, type=float)
-        parser.add_argument("grr_weight", default=0.25, type=float)
-        parser.add_argument("lar_weight", default=0.5, type=float)
-        parser.add_argument("lrr_weight", default=0.25, type=float)
-        parser.add_argument("arev_weight", default=0.5, type=float)
-        parser.add_argument("rrev_weight", default=0.25, type=float)
-        parser.add_argument("lrot_topk", default=25, type=int)
+        parser.add_argument("--moco_weight", default=1, type=float)
+        parser.add_argument("--rotation_weight", default=1, type=float)
+        parser.add_argument("--use_entropy_gar", default=1, type=int)
+        parser.add_argument("--use_entropy_lar", default=1, type=int)
+        parser.add_argument("--use_entropy_arev", default=1, type=int)
+        parser.add_argument("--dense_split", default=7, type=int)
+        parser.add_argument("--dense_feats_dim", default=128, type=int)
+        parser.add_argument("--gar_weight", default=0.5, type=float)
+        parser.add_argument("--grr_weight", default=0.25, type=float)
+        parser.add_argument("--lar_weight", default=0.5, type=float)
+        parser.add_argument("--lrr_weight", default=0.25, type=float)
+        parser.add_argument("--arev_weight", default=0.5, type=float)
+        parser.add_argument("--rrev_weight", default=0.25, type=float)
+        parser.add_argument("--lrot_topk", default=25, type=int)
 
 
         return parent_parser
@@ -376,6 +376,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         ar_loss1 = F.cross_entropy(ar_pred1, joint_rot_label1, reduction='none')
         ar_loss2 = F.cross_entropy(ar_pred2, joint_rot_label2, reduction='none')
         if use_entropy:
+            # print('use_entropy')
             h1 = self.calc_entropy(ar_pred1.detach(), 16)
             ar_loss1 = h1 * ar_loss1
             h2 = self.calc_entropy(ar_pred2.detach(), 16)
@@ -431,11 +432,11 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             h = self.calc_entropy(denses_ar_pred.detach(), 16)
             denses_ar_loss = h * denses_ar_loss
             # 依据熵值，筛选topk的元素
-            ori_h = h.clone().reshape(denses[0].shape[0],denses[0].shape[1])
-            index_h = ori_h.topk(topk)[1]
-            index_h_sup = torch.LongTensor([[i*ori_h.shape[1] for j in range(index_h.shape[1])] for i in range(ori_h.shape[0])]).to(index_h.device)
-            index_h = index_h + index_h_sup
-            denses_ar_loss = torch.take(denses_ar_loss, index_h).mean(dim=-1)
+            # ori_h = h.clone().reshape(denses[0].shape[0],denses[0].shape[1])
+            # index_h = ori_h.topk(topk)[1]
+            # index_h_sup = torch.LongTensor([[i*ori_h.shape[1] for j in range(index_h.shape[1])] for i in range(ori_h.shape[0])]).to(index_h.device)
+            # index_h = index_h + index_h_sup
+            # denses_ar_loss = torch.take(denses_ar_loss, index_h).mean(dim=-1)
         
         denses_ar_loss = denses_ar_loss.mean(dim=0)
         acc1 = accuracy_at_k(denses_ar_pred, dense_label, top_k=(1,))[0]
@@ -683,9 +684,13 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         feats1, feats2 = out["feats"]
         momentum_feats1, momentum_feats2 = out["momentum_feats"]
 
-
-        if self.do_rotatation:
-
+        # print(self.rotation_weight,self.moco_weight)
+        # print(self.gar_weight,self.grr_weight)
+        # print(self.lar_weight,self.lrr_weight)
+        # print(self.arev_weight,self.rrev_weight)
+        
+        if self.rotation_weight>0:
+            # print("do_rotation")
             feats_rot0 , dense_rot0, feats_rot1, dense_rot1 = None, None, None, None
 
             gr_loss, gar_loss, grr_loss = None, None, None
@@ -700,11 +705,16 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 feats_rot0, dense_rot1 = self.dense_forward(batch[1][0])
 
             elif branch == 4:
-                feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[0])
-                feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[1])
+                if self.lar_weight>0 or self.lrr_weight>0 or self.arev_weight>0 or self.rrev_weight>0:
+                    feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[0])
+                    feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[1])
+                else:
+                    feats_rot0 = self.encoder(rot_Xs[0])
+                    feats_rot1 = self.encoder(rot_Xs[1])
 
 
             if self.gar_weight>0:
+                # print('gar')
                 """
                     全局绝对旋转模块，权重>0开启，节约计算资源
                 """
@@ -719,6 +729,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     gr_loss += gar_loss*self.gar_weight
             
             if self.grr_weight>0:
+                # print('grr')
                 """
                     全局相对旋转模块，权重>0开启，节约计算资源
                 """
@@ -733,6 +744,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     gr_loss += grr_loss*self.grr_weight
 
             if self.lar_weight>0:
+                # print('lar')
                 """
                     局部绝对自转模块
                 """
@@ -750,6 +762,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     lr_loss += lar_loss*self.lar_weight
 
             if self.lrr_weight>0:
+                # print('lrr')
                 """
                     局部相对自转模块
                 """
@@ -767,6 +780,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     lr_loss += lrr_loss*self.lrr_weight
 
             if self.arev_weight>0:
+                # print('arev')
                 """
                     绝对公转模块
                 """
@@ -781,6 +795,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                     rev_loss += arev_loss*self.arev_weight
 
             if self.rrev_weight>0:
+                # print('rrev')
                 """
                     相对公转模块
                 """
@@ -817,7 +832,8 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             # 向总loss中加入旋转模块的loss
             total_loss = total_loss + rotation_loss
 
-        if self.do_moco:
+        if self.moco_weight>0:
+            # print("do_moco")
             q1 = self.projector(feats1)
             q2 = self.projector(feats2)
             q1 = F.normalize(q1, dim=-1)
