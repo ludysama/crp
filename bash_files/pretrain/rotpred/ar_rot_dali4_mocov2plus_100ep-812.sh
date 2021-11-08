@@ -37,7 +37,7 @@ python main_pretrain.py \
     --moco_weight 0 \
     --rotation_weight 1 \
     --gar_weight 0.5 \
-    --use_entropy_gar 1 \
+    --use_entropy_gar 0 \
     --grr_weight 0 \
     --lar_weight 0 \
     --use_entropy_lar 1 \

@@ -19,7 +19,6 @@
 
 import argparse
 from math import degrees
-from os import WIFSTOPPED
 from typing import Any, Dict, List, Sequence, Tuple
 
 import torch
@@ -35,9 +34,7 @@ from solo.utils.metrics import accuracy_at_k
 from solo.utils.misc import gather
 
 def check_imgs(X:torch.Tensor) -> None:
-    '''
-    检查输入数据的方法
-    '''
+    
     class Denormalize(object):
         def __init__(self, mean, std):
             self.mean = mean
@@ -103,18 +100,42 @@ def rotate_batch(batch, branch=4):
         rot_X0 = rotate_tensors(X[2], rot_label_r0)
         rot_X1 = rotate_tensors(X[3], rot_label_r1)
         # # 下面代码rotation jittering的随机性不是独立的，同一个batch共享一个参数
-        # with torch.no_grad():
-        #     rot_X0 = transforms.RandomRotation(3)(rot_X0)
-        #     rot_X0 = transforms.CenterCrop(192)(rot_X0)
-        #     rot_X0 = transforms.Resize(224)(rot_X0)
+        with torch.no_grad():
+            rot_X0 = transforms.RandomRotation(15)(rot_X0)
+            rot_X0 = transforms.CenterCrop(192)(rot_X0)
+            rot_X0 = transforms.Resize(224)(rot_X0)
             
-        #     rot_X1 = transforms.RandomRotation(3)(rot_X1)
-        #     rot_X1 = transforms.CenterCrop(192)(rot_X1)
-        #     rot_X1 = transforms.Resize(224)(rot_X1)
+            rot_X1 = transforms.RandomRotation(15)(rot_X1)
+            rot_X1 = transforms.CenterCrop(192)(rot_X1)
+            rot_X1 = transforms.Resize(224)(rot_X1)
 
         # added some detach
         batch = (_, [X[0].detach(), X[1].detach()], cls_label)
         return batch, [rot_X0.detach(), rot_X1.detach()], rot_label_r0.detach(), rot_label_r1.detach()
+
+    if branch == 6:
+        rot_label_r0 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r1 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r2 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        rot_label_r3 = torch.LongTensor([i for i in range(4) for k in range(cls_label.shape[0] // 4)]).to(cls_label.device)
+        mask_r0 = torch.randperm(cls_label.shape[0])
+        mask_r1 = torch.randperm(cls_label.shape[0])
+        mask_r2 = torch.randperm(cls_label.shape[0])
+        mask_r3 = torch.randperm(cls_label.shape[0])
+        rot_label_r0 = rot_label_r0[mask_r0]
+        rot_label_r1 = rot_label_r1[mask_r1]
+        rot_label_r2 = rot_label_r0[mask_r2]
+        rot_label_r3 = rot_label_r1[mask_r3]
+        rot_X0 = rotate_tensors(X[2], rot_label_r0)
+        rot_X1 = rotate_tensors(X[3], rot_label_r1)
+        rot_X2 = rotate_tensors(X[4], rot_label_r2)
+        rot_X3 = rotate_tensors(X[5], rot_label_r3)
+        # rot_X0 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X0)
+        # rot_X1 = transforms.RandomResizedCrop(224, scale=(0.5,1.0),interpolation=transforms.InterpolationMode.BICUBIC)(rot_X1)
+        # added some detach
+        batch = (_, [X[0].detach(), X[1].detach()], cls_label)
+        return batch, [rot_X0.detach(), rot_X1.detach(), rot_X2.detach(), rot_X3.detach], \
+            [rot_label_r0.detach(), rot_label_r1.detach(), rot_label_r2.detach(), rot_label_r3.detach()]
 
 class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
     queue: torch.Tensor
@@ -127,20 +148,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         proj_hidden_dim: int,
         temperature: float,
         queue_size: int,
-        moco_weight: bool,
-        rotation_weight: bool,
-        use_entropy_gar:int,
-        use_entropy_lar:int,
-        use_entropy_arev:int,
-        dense_split: int,
-        dense_feats_dim: int,
-        gar_weight: float,
-        grr_weight: float,
-        lar_weight: float,
-        lrr_weight: float,
-        arev_weight: float,
-        rrev_weight: float,
-        lrot_topk: int,
         **kwargs
     ):
         """Implements MoCo V2+ (https://arxiv.org/abs/2011.10566).
@@ -156,20 +163,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
 
         self.temperature = temperature
         self.queue_size = queue_size
-        self.moco_weight = moco_weight
-        self.rotation_weight = rotation_weight
-        self.use_entropy_gar = use_entropy_gar
-        self.use_entropy_lar = use_entropy_lar
-        self.use_entropy_arev = use_entropy_arev
-        self.dense_split = dense_split
-        self.dense_feats_dim = dense_feats_dim
-        self.gar_weight = gar_weight
-        self.grr_weight = grr_weight
-        self.lar_weight = lar_weight
-        self.lrr_weight = lrr_weight
-        self.arev_weight = arev_weight
-        self.rrev_weight = rrev_weight
-        self.lrot_topk = lrot_topk
+        # self.method_name = 'ar_rot_mocov2plus'
 
         # projector
         self.projector = nn.Sequential(
@@ -184,30 +178,44 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             nn.Linear(proj_hidden_dim, proj_output_dim),
         )
 
-        # gar&lar absolute rotation prediction setting
-        self.a_rot_classifier = nn.Sequential(
-            nn.Linear(self.features_dim*2, proj_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(proj_hidden_dim, 4**2)
-        )
+        # absolute rotation prediction settings
+        dual_branch = 1
+        self.solo_gar = False
+        if not self.solo_gar:
+            dual_branch = 2
+        non_linear = True
+        base_dim = self.features_dim
+        # if self.feature_after_moco_projector:
+        #     base_dim = proj_output_dim
+        if non_linear:
+            # a_rot non-linear classifier
+            self.a_rot_classifier = nn.Sequential(
+                nn.Linear(base_dim*dual_branch, proj_hidden_dim),
+                # nn.BatchNorm1d(proj_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(proj_hidden_dim, 4**dual_branch)
+            )
+        else:
+            # a_rot linear classifier
+            self.a_rot_classifier = nn.Linear(base_dim*dual_branch, 4**dual_branch)
 
-        # grr&lrr relative rotation prediction settings
+        # relative rotation prediction settings
         self.r_rot_classifier = nn.Sequential(
-                nn.Linear(self.features_dim*2, proj_hidden_dim),
+                nn.Linear(base_dim*2, proj_hidden_dim),
+                # nn.Dropout(p=0.8),
+                # nn.BatchNorm1d(proj_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(proj_hidden_dim, 4)
             )
 
-        self.encoder.dense_avgpool = nn.AdaptiveAvgPool2d((self.dense_split, self.dense_split))
+        self.dense_split = 7
+        # self.encoder.dense_avgpool = nn.AdaptiveAvgPool2d((self.dense_split, self.dense_split))
+
+        self.dense_feats_dim = 128
 
         self.a_rev_classifier = nn.Sequential(
-                nn.Linear(self.dense_feats_dim*self.dense_split**2*2, proj_hidden_dim),
-                nn.ReLU(),
-                nn.Linear(proj_hidden_dim, 16)
-            )
-
-        self.r_rev_classifier = nn.Sequential(
-                nn.Linear(self.dense_feats_dim*self.dense_split**2*2, proj_hidden_dim),
+                nn.Linear(self.dense_feats_dim*self.dense_split**2, proj_hidden_dim),
+                # nn.BatchNorm1d(proj_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(proj_hidden_dim, 4)
             )
@@ -239,23 +247,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         # queue settings
         parser.add_argument("--queue_size", default=65536, type=int)
 
-        # rotation module settings
-        parser.add_argument("--moco_weight", default=1, type=float)
-        parser.add_argument("--rotation_weight", default=1, type=float)
-        parser.add_argument("--use_entropy_gar", default=1, type=int)
-        parser.add_argument("--use_entropy_lar", default=1, type=int)
-        parser.add_argument("--use_entropy_arev", default=1, type=int)
-        parser.add_argument("--dense_split", default=7, type=int)
-        parser.add_argument("--dense_feats_dim", default=128, type=int)
-        parser.add_argument("--gar_weight", default=0.5, type=float)
-        parser.add_argument("--grr_weight", default=0.25, type=float)
-        parser.add_argument("--lar_weight", default=0.5, type=float)
-        parser.add_argument("--lrr_weight", default=0.25, type=float)
-        parser.add_argument("--arev_weight", default=0.5, type=float)
-        parser.add_argument("--rrev_weight", default=0.25, type=float)
-        parser.add_argument("--lrot_topk", default=25, type=int)
-
-
         return parent_parser
 
     @property
@@ -270,8 +261,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             {"params": self.projector.parameters()},
             {"params": self.a_rot_classifier.parameters()},
             {"params": self.r_rot_classifier.parameters()},
-            {"params": self.a_rev_classifier.parameters()},
-            {"params": self.r_rev_classifier.parameters()}
+            {"params": self.a_rev_classifier.parameters()}
             ]
         return super().learnable_params + extra_learnable_params
 
@@ -348,10 +338,8 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         return {**out, "q": q}
 
     def do_solo_gar(self, feats:torch.Tensor, rot_label:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
-        '''
-            单分支全局绝对旋转模块
-        '''
         ar_pred = self.a_rot_classifier(feats)
+        # ar_pred = F.normalize(ar_pred, dim=-1)
         ar_loss = F.cross_entropy(ar_pred, rot_label, reduction='none')
         if use_entropy:
             h = self.calc_entropy(ar_pred.detach(), 4)
@@ -363,57 +351,37 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         acc1 = accuracy_at_k(ar_pred, rot_label, top_k=(1,))[0]
         return ar_loss, acc1
     
-    def do_dual_gar(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False) -> torch.Tensor:
-        '''
-            双分支全局绝对旋转模块
-        '''
-        feats_cat1 = torch.cat((feats[0], feats[1]), dim=1)
-        feats_cat2 = torch.cat((feats[1], feats[0]), dim=1)
-        ar_pred1 = self.a_rot_classifier(feats_cat1)
-        joint_rot_label1 = (rot_labels[0]*4 + rot_labels[1]).detach()
-        ar_pred2 = self.a_rot_classifier(feats_cat2)
-        joint_rot_label2 = (rot_labels[1]*4 + rot_labels[0]).detach()
-        ar_loss1 = F.cross_entropy(ar_pred1, joint_rot_label1, reduction='none')
-        ar_loss2 = F.cross_entropy(ar_pred2, joint_rot_label2, reduction='none')
+    def do_dual_gar(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+        feats_cat = torch.cat((feats[0], feats[1]), dim=1)
+        ar_pred = self.a_rot_classifier(feats_cat)
+        joint_rot_label = rot_labels[0]*4 + rot_labels[1]
+        ar_loss = F.cross_entropy(ar_pred, joint_rot_label, reduction='none')
         if use_entropy:
-            # print('use_entropy')
-            h1 = self.calc_entropy(ar_pred1.detach(), 16)
-            ar_loss1 = h1 * ar_loss1
-            h2 = self.calc_entropy(ar_pred2.detach(), 16)
-            ar_loss1 = h2 * ar_loss2
-        ar_loss = (ar_loss1.mean(dim=0) + ar_loss2.mean(dim=0)) / 2
-        acc1_1 = accuracy_at_k(ar_pred1, joint_rot_label1,top_k=(1,))[0]
-        acc1_2 = accuracy_at_k(ar_pred2, joint_rot_label2,top_k=(1,))[0]
-        acc1 = (acc1_1 + acc1_2) / 2
+            h = self.calc_entropy(ar_pred.detach(), 16)
+            ar_loss = h * ar_loss
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            ar_loss = anti_weights * ar_loss
+
+        ar_loss = ar_loss.mean(dim=0)
+        acc1 = accuracy_at_k(ar_pred, joint_rot_label,top_k=(1,))[0]
         return ar_loss, acc1
 
-    def do_dual_grr(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False) -> torch.Tensor:
-        '''
-            双分支全局相对旋转模块
-        '''
-        feats_cat1 = torch.cat((feats[0], feats[1]), dim=1)
-        feats_cat2 = torch.cat((feats[1], feats[0]), dim=1)
-        rr_pred1 = self.r_rot_classifier(feats_cat1)
-        joint_rot_label1 = ((rot_labels[1]-rot_labels[0]) % 4).detach()
-        rr_pred2 = self.r_rot_classifier(feats_cat2)
-        joint_rot_label2 = ((rot_labels[0]-rot_labels[1]) % 4).detach()
-        rr_loss1 = F.cross_entropy(rr_pred1, joint_rot_label1, reduction='none')
-        rr_loss2 = F.cross_entropy(rr_pred2, joint_rot_label2, reduction='none')
+    def do_dual_grr(self, feats:torch.Tensor, rot_labels:torch.Tensor,use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+        feats_cat = torch.cat((feats[0],feats[1]), dim=1)
+        rr_pred = self.r_rot_classifier(feats_cat)
+        rr_loss = F.cross_entropy(rr_pred, (rot_labels[1]-rot_labels[0])%4, reduction='none')
         if use_entropy:
-            h1 = self.calc_entropy(rr_pred1.detach(), 4)
-            rr_loss1 = h1 * rr_loss1
-            h2 = self.calc_entropy(rr_pred2.detach(), 4)
-            rr_loss1 = h2 * rr_loss2
-        rr_loss = (rr_loss1.mean(dim=0) + rr_loss2.mean(dim=0)) / 2
-        acc1_1 = accuracy_at_k(rr_pred1, joint_rot_label1,top_k=(1,))[0]
-        acc1_2 = accuracy_at_k(rr_pred2, joint_rot_label2,top_k=(1,))[0]
-        acc1 = (acc1_1 + acc1_2) / 2
+            h = self.calc_entropy(rr_pred.detach(), 4)
+            rr_loss = h * rr_loss
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            rr_loss = anti_weights * rr_loss
+        rr_loss = rr_loss.mean(dim=0)
+        acc1 = accuracy_at_k(rr_pred, (rot_labels[1]-rot_labels[0])%4, top_k=(1,))[0]
         return rr_loss, acc1
 
-    def do_dual_lar(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, topk=1) -> torch.Tensor:
-        '''
-            双分支局部绝对旋转模块
-        '''
+    def do_dual_lar(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
         denses[1] = self.do_revolution(denses[1], rot_labels[0], rot_labels[1])
 
         denses_cat = torch.cat((denses[0],denses[1]), dim=2)
@@ -431,21 +399,14 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         if use_entropy:
             h = self.calc_entropy(denses_ar_pred.detach(), 16)
             denses_ar_loss = h * denses_ar_loss
-            # 依据熵值，筛选topk的元素
-            # ori_h = h.clone().reshape(denses[0].shape[0],denses[0].shape[1])
-            # index_h = ori_h.topk(topk)[1]
-            # index_h_sup = torch.LongTensor([[i*ori_h.shape[1] for j in range(index_h.shape[1])] for i in range(ori_h.shape[0])]).to(index_h.device)
-            # index_h = index_h + index_h_sup
-            # denses_ar_loss = torch.take(denses_ar_loss, index_h).mean(dim=-1)
-        
-        denses_ar_loss = denses_ar_loss.mean(dim=0)
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            denses_ar_loss = anti_weights * denses_ar_loss
+        denses_ar_loss = denses_ar_loss.mean(dim=0) / self.dense_split**2
         acc1 = accuracy_at_k(denses_ar_pred, dense_label, top_k=(1,))[0]
         return denses_ar_loss, acc1
 
-    def do_dual_lrr(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False) -> torch.Tensor:
-        '''
-            双分支局部相对旋转模块
-        '''
+    def do_dual_lrr(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
         denses[1] = self.do_revolution(denses[1], rot_labels[0], rot_labels[1])
 
         denses_cat = torch.cat((denses[0],denses[1]), dim=2)
@@ -463,15 +424,16 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         if use_entropy:
             h = self.calc_entropy(denses_rr_pred.detach(), 4)
             denses_rr_loss = h * denses_rr_loss
-
-        # denses_rr_loss = denses_rr_loss.mean(dim=0) / self.dense_split**2
-        denses_rr_loss = denses_rr_loss.mean(dim=0)
+        if use_anti_weights:
+            anti_weights = 1 - self.current_epoch / self.max_epochs
+            denses_rr_loss = anti_weights * denses_rr_loss
+        denses_rr_loss = denses_rr_loss.mean(dim=0) / self.dense_split**2
         acc1 = accuracy_at_k(denses_rr_pred, dense_label, top_k=(1,))[0]
         return denses_rr_loss, acc1
 
-    def do_solo_arev(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
+    def do_solo_lrv(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
         """
-            单分支绝对公转模块，使用自身的公转特征0,1,2,3与自身0拼接
+        使用自身的公转特征0,1,2,3与自身0拼接
         """
         denses_rev1s = []
         denses_rev2s = []
@@ -511,104 +473,55 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
         return denses_rev_loss, acc1
 
-    def do_dual_arev(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False) -> torch.Tensor:
+    def do_dual_lrv(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False, use_anti_weights=False) -> torch.Tensor:
         """
-            双分支绝对公转模块
+        使用自身的公转特征0,1,2,3与自身0拼接
+        逻辑没理清，占个位
         """
-        one_labels = torch.LongTensor([1]*denses[0].shape[0]).to(denses[0].device)
+        # denses_rev1s = []
+        # denses_rev2s = []
+        # one_labels = torch.LongTensor([1]*denses[0].shape[0]).to(denses[0].device)
 
-        with torch.no_grad():
-            tmp_rev_label1 = torch.LongTensor([i for i in range(4) for k in range(denses[0].shape[0] // 4)]).to(denses[0].device)
-            tmp_rev_label2 = torch.LongTensor([i for i in range(4) for k in range(denses[0].shape[0] // 4)]).to(denses[0].device)
-            mask_r0 = torch.randperm(denses[0].shape[0])
-            mask_r1 = torch.randperm(denses[0].shape[0])
-            tmp_rev_label1 = tmp_rev_label1[mask_r0]
-            tmp_rev_label2 = tmp_rev_label2[mask_r1]
+        # for i in range(4):
+        #     denses_rev1s.append(self.do_revolution(denses[0], (one_labels*i).detach(), (one_labels*0).detach()))
+        #     denses_rev2s.append(self.do_revolution(denses[1], (one_labels*i).detach(), (one_labels*0).detach()))
+        
+        # for i in range(4):
+        #     denses_rev1s[i] = denses_rev1s[i][:,:,:self.dense_feats_dim].reshape(denses_rev1s[i].shape[0],-1).clone()
+        #     denses_rev2s[i] = denses_rev2s[i][:,:,:self.dense_feats_dim].reshape(denses_rev2s[i].shape[0],-1).clone()
+        # dense_rev1 = torch.cat(denses_rev1s, dim=0)
+        # dense_rev2 = torch.cat(denses_rev2s, dim=0)
+        # # 默认公转标签是0
+        # # dense_rev_label1 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
+        # # dense_rev_label2 = torch.cat([(one_labels*i).detach() for i in range(4)], dim=0)
+        # # # 默认公转标签是自身旋转标签
+        # dense_rev_label1 = torch.cat([((rot_labels[0]+i)% 4).detach() for i in range(4)], dim=0)
+        # dense_rev_label2 = torch.cat([((rot_labels[1]+i)% 4).detach() for i in range(4)], dim=0)
 
-        denses[0] = self.do_revolution(denses[0], tmp_rev_label1.detach(), (one_labels*0).detach())
-        denses[1] = self.do_revolution(denses[1], tmp_rev_label2.detach(), (one_labels*0).detach())
+        # denses_rev_pred1 = self.a_rev_classifier(dense_rev1) # or create a new classifier?
+        # denses_rev_pred2 = self.a_rev_classifier(dense_rev2) # or create a new classifier?
+        # denses_rev_loss1 = F.cross_entropy(denses_rev_pred1, dense_rev_label1, reduction='none')
+        # denses_rev_loss2 = F.cross_entropy(denses_rev_pred2, dense_rev_label2, reduction='none')
+        # if use_entropy:
+        #     h1 = self.calc_entropy(denses_rev_pred1.detach(), 4)
+        #     h2 = self.calc_entropy(denses_rev_pred2.detach(), 4)
+        #     denses_rev_loss1 = h1 * denses_rev_loss1
+        #     denses_rev_loss2 = h2 * denses_rev_loss2
+        # if use_anti_weights:
+        #     anti_weights = 1 - self.current_epoch / self.max_epochs
+        #     denses_rev_loss1 = anti_weights * denses_rev_loss1
+        #     denses_rev_loss2 = anti_weights * denses_rev_loss2
 
-        dense_rev1 = denses[0][:,:,:self.dense_feats_dim].reshape(denses[0].shape[0],-1).clone()
-        dense_rev2 = denses[1][:,:,:self.dense_feats_dim].reshape(denses[1].shape[0],-1).clone()
-
-        dense_cat1 = torch.cat((dense_rev1, dense_rev2), dim=1)
-        dense_cat2 = torch.cat((dense_rev2, dense_rev1), dim=1)
-
-        # 默认公转标签是自身旋转标签
-        with torch.no_grad():
-            dense_rev_label1 = (rot_labels[0] + tmp_rev_label1) % 4
-            dense_rev_label2 = (rot_labels[1] + tmp_rev_label2) % 4
-            dense_joint_label1 = dense_rev_label1 * 4 + dense_rev_label2
-            dense_joint_label2 = dense_rev_label2 * 4 + dense_rev_label1
-
-        denses_rev_pred1 = self.a_rev_classifier(dense_cat1) # or create a new classifier?
-        denses_rev_pred2 = self.a_rev_classifier(dense_cat2) # or create a new classifier?
-        denses_rev_loss1 = F.cross_entropy(denses_rev_pred1, dense_joint_label1, reduction='none')
-        denses_rev_loss2 = F.cross_entropy(denses_rev_pred2, dense_joint_label2, reduction='none')
-
-        if use_entropy:
-            h1 = self.calc_entropy(denses_rev_pred1.detach(), 16)
-            h2 = self.calc_entropy(denses_rev_pred2.detach(), 16)
-            denses_rev_loss1 = h1 * denses_rev_loss1
-            denses_rev_loss2 = h2 * denses_rev_loss2
-
-        denses_rev_loss = (denses_rev_loss1.mean(dim=0) + denses_rev_loss2.mean(dim=0)) / 2
-        acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + \
-                accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
-        return denses_rev_loss, acc1
-
-    def do_dual_rrev(self, denses:torch.Tensor, rot_labels:torch.Tensor, use_entropy=False) -> torch.Tensor:
-        """
-            双分支相对公转模块
-        """
-        one_labels = torch.LongTensor([1]*denses[0].shape[0]).to(denses[0].device)
-
-        with torch.no_grad():
-            tmp_rev_label1 = torch.LongTensor([i for i in range(4) for k in range(denses[0].shape[0] // 4)]).to(denses[0].device)
-            tmp_rev_label2 = torch.LongTensor([i for i in range(4) for k in range(denses[0].shape[0] // 4)]).to(denses[0].device)
-            mask_r0 = torch.randperm(denses[0].shape[0])
-            mask_r1 = torch.randperm(denses[0].shape[0])
-            tmp_rev_label1 = tmp_rev_label1[mask_r0]
-            tmp_rev_label2 = tmp_rev_label2[mask_r1]
-
-        denses[0] = self.do_revolution(denses[0], tmp_rev_label1.detach(), (one_labels*0).detach())
-        denses[1] = self.do_revolution(denses[1], tmp_rev_label2.detach(), (one_labels*0).detach())
-
-        dense_rev1 = denses[0][:,:,:self.dense_feats_dim].reshape(denses[0].shape[0],-1).clone()
-        dense_rev2 = denses[1][:,:,:self.dense_feats_dim].reshape(denses[1].shape[0],-1).clone()
-
-        dense_cat1 = torch.cat((dense_rev1, dense_rev2), dim=1)
-        dense_cat2 = torch.cat((dense_rev2, dense_rev1), dim=1)
-
-        # 默认公转标签是自身旋转标签
-        with torch.no_grad():
-            dense_rev_label1 = (rot_labels[0] + tmp_rev_label1) % 4
-            dense_rev_label2 = (rot_labels[1] + tmp_rev_label2) % 4
-            dense_joint_label1 = (dense_rev_label2 - dense_rev_label1) % 4
-            dense_joint_label2 = (dense_rev_label1 - dense_rev_label2) % 4
-
-        denses_rev_pred1 = self.r_rev_classifier(dense_cat1) # or create a new classifier?
-        denses_rev_pred2 = self.r_rev_classifier(dense_cat2) # or create a new classifier?
-        denses_rev_loss1 = F.cross_entropy(denses_rev_pred1, dense_joint_label1, reduction='none')
-        denses_rev_loss2 = F.cross_entropy(denses_rev_pred2, dense_joint_label2, reduction='none')
-
-        if use_entropy:
-            h1 = self.calc_entropy(denses_rev_pred1.detach(), 4)
-            h2 = self.calc_entropy(denses_rev_pred2.detach(), 4)
-            denses_rev_loss1 = h1 * denses_rev_loss1
-            denses_rev_loss2 = h2 * denses_rev_loss2
-
-        denses_rev_loss = (denses_rev_loss1.mean(dim=0) + denses_rev_loss2.mean(dim=0)) / 2
-        acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + \
-                accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
-        return denses_rev_loss, acc1
+        # denses_rev_loss = (denses_rev_loss1 +denses_rev_loss2).mean(dim=0) / 2
+        # acc1 = (accuracy_at_k(denses_rev_pred1, dense_rev_label1, top_k=(1,))[0] + accuracy_at_k(denses_rev_pred2, dense_rev_label2, top_k=(1,))[0]) /2
+        # return denses_rev_loss, acc1
 
 
     # 计算预测熵，此处只衡量模型对预测的自信程度，不考虑预测的准确性
     @torch.no_grad()
     def calc_entropy(self, pred:torch.Tensor, cls_dim:int, temperature:float=0.1, scale:float=5.0, low:float=0.01) -> torch.Tensor:
-        # 熵的warmup，将上（下）界以sin（-sin）函数的形式增长（衰减）到参数指定的值，current_epoch*x 中x表示warmup max_epoch/x个ep
-        if self.current_epoch*10 <= self.max_epochs:
+        # parameters warmup
+        if self.current_epoch*4 <= self.max_epochs:
             eps = torch.Tensor([self.current_epoch*2/self.max_epochs*3.141592653]).to(pred.device)
             actual_scale = (scale-1)*torch.sin(eps).item()+1
             actual_low = (low-1)*torch.sin(eps).item()+1
@@ -622,7 +535,6 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         p = p.softmax(dim=1)
         h = torch.sum(-p * torch.log(p + 1e-4), dim=1) / bit_dim
         h = (actual_scale-actual_low) * (1-h) + actual_low
-        
         return h
 
     # 输出global级别和local级别特征的前向传播
@@ -637,7 +549,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         x = self.encoder.layer3(x)
         x = self.encoder.layer4(x)
 
-        dense_x = self.encoder.dense_avgpool(x)
+        # dense_x = self.encoder.dense_avgpool(x)
         dense_x = torch.flatten(x.clone(),2)
         dense_x = dense_x.permute(0,2,1)
 
@@ -669,6 +581,8 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
             batch, rot_X, rot_label_r0, rot_label_r1 = rotate_batch(batch, branch=3)
         if branch == 4:
             batch, rot_Xs, rot_label_r0, rot_label_r1 = rotate_batch(batch, branch=4)
+        if branch == 6:
+            batch, rot_Xs, rot_labels = rotate_batch(batch, branch=6)
 
         # 检查输入数据，使用检查代码时需要在MobaXterm里跑
         # print(rot_label_r0[:4], rot_label_r1[:4])
@@ -676,7 +590,7 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         
         # 欺骗moco的基本模型，使得可以继承solo-learn作者写的主框架
         self.num_crops = 2
-        # 集成moco方法的输出（主要是为了使用它的online分类器查看性能，class_loss负责这块）
+        
         out = super().training_step(batch, batch_idx)
         class_loss = out["loss"]
         total_loss = class_loss
@@ -684,155 +598,119 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
         feats1, feats2 = out["feats"]
         momentum_feats1, momentum_feats2 = out["momentum_feats"]
 
-        # print(self.rotation_weight,self.moco_weight)
-        # print(self.gar_weight,self.grr_weight)
-        # print(self.lar_weight,self.lrr_weight)
-        # print(self.arev_weight,self.rrev_weight)
-        
-        if self.rotation_weight>0:
-            # print("do_rotation")
+        do_rotate = True
+        do_moco = False
+
+        if do_rotate:
+            get_locoal_features = False
             feats_rot0 , dense_rot0, feats_rot1, dense_rot1 = None, None, None, None
+
+            do_global_rotation = True
+            do_local_rotation = False
+            do_local_revolution = False
+            assert not (get_locoal_features and (do_local_revolution or do_local_rotation)), "local tasks can't be done without local features"
 
             gr_loss, gar_loss, grr_loss = None, None, None
             lr_loss, lar_loss, lrr_loss = None, None, None
-            arev_loss, rrev_loss, rev_loss = None, None, None
+            lrv_loss = None
             rotation_loss = None
-            """
-                为模块提供特征的中间件
-            """
-            if branch == 3: 
-                feats_rot0, dense_rot0 = self.dense_forward(rot_X)
-                feats_rot0, dense_rot1 = self.dense_forward(batch[1][0])
 
+            if branch == 3: 
+                if get_locoal_features:
+                    feats_rot0, dense_rot0 = self.dense_forward(rot_X)
+                    feats_rot0, dense_rot1 = self.dense_forward(batch[1][0])
+                else:
+                    feats_rot0 = self.encoder(rot_X)
+                    feats_rot1 = feats1.clone()
             elif branch == 4:
-                if self.lar_weight>0 or self.lrr_weight>0 or self.arev_weight>0 or self.rrev_weight>0:
+                if get_locoal_features:
                     feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[0])
                     feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[1])
                 else:
                     feats_rot0 = self.encoder(rot_Xs[0])
                     feats_rot1 = self.encoder(rot_Xs[1])
-
-
-            if self.gar_weight>0:
-                # print('gar')
-                """
-                    全局绝对旋转模块，权重>0开启，节约计算资源
-                """
-                dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=self.use_entropy_gar)
-                gar_loss = dual_gar_loss
-                self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
-                self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
-
-                if gr_loss == None:
-                    gr_loss = gar_loss*self.gar_weight
+            elif branch == 6:
+                rot_label_r0 = rot_labels[2]
+                rot_label_r1 = rot_labels[3]
+                if get_locoal_features:
+                    feats_rot0, dense_rot0 = self.dense_forward(rot_Xs[2])
+                    feats_rot1, dense_rot1 = self.dense_forward(rot_Xs[3])
                 else:
-                    gr_loss += gar_loss*self.gar_weight
-            
-            if self.grr_weight>0:
-                # print('grr')
-                """
-                    全局相对旋转模块，权重>0开启，节约计算资源
-                """
-                dual_grr_loss, dual_grr_acc1 = self.do_dual_grr([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False)    
+                    feats_rot0 = self.encoder(rot_Xs[2])
+                    feats_rot1 = self.encoder(rot_Xs[3])
+
+            if do_global_rotation:
+                # 结合moco框架下不要用solo_gar分支
+                if self.solo_gar:
+                    assert False, "don't use solo_gar in current version"
+                    # solo_gar_loss_0, solo_gar_acc1_0 = self.do_solo_gar(feats_rot0, rot_label_r, use_entropy=False, use_anti_weights=False)
+                    # solo_gar_loss_1, solo_gar_acc1_1 = self.do_solo_gar(feats_rot1, rot_label_m, use_entropy=False, use_anti_weights=False)
+                    # solo_gar_loss = (solo_gar_loss_0 + solo_gar_loss_1) / 2
+                    # solo_gar_acc1 = (solo_gar_acc1_0 + solo_gar_acc1_1) / 2
+                    # gar_loss = solo_gar_loss
+                    # self.log("solo_gar_loss", solo_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
+                    # self.log("solo_gar_acc1", solo_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
+                else:
+                    dual_gar_loss, dual_gar_acc1 = self.do_dual_gar([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)
+                    '''
+                        注释？
+                    '''
+                    gar_loss = dual_gar_loss
+                    self.log("dual_gar_loss", dual_gar_loss, on_epoch=True, on_step=False, sync_dist=True)
+                    self.log("dual_gar_acc1", dual_gar_acc1, on_epoch=True, on_step=False, sync_dist=True)
+                
+                dual_grr_loss, dual_grr_acc1 = self.do_dual_grr([feats_rot0.clone(), feats_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False, use_anti_weights=False)    
                 self.log("dual_grr_loss", dual_grr_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_grr_acc1", dual_grr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 grr_loss = dual_grr_loss
-
-                if gr_loss == None:
-                    gr_loss = grr_loss*self.grr_weight
+                if self.current_epoch < 3 and False: 
+                    gr_loss = 0.01*gar_loss + 0.25*grr_loss
                 else:
-                    gr_loss += grr_loss*self.grr_weight
+                    # gr_loss = 0.4*gar_loss + 0.1*grr_loss
+                    # gr_loss = 0*gar_loss + 0.04*grr_loss
+                    gr_loss = 0*gar_loss + 0.25*grr_loss
 
-            if self.lar_weight>0:
-                # print('lar')
-                """
-                    局部绝对自转模块
-                """
-                dual_lar_loss1, dual_lar_acc11 = self.do_dual_lar([dense_rot0.clone(), dense_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=self.use_entropy_lar, topk=self.lrot_topk)
-                dual_lar_loss2, dual_lar_acc12 = self.do_dual_lar([dense_rot1.clone(), dense_rot0.clone()], [rot_label_r1.clone(), rot_label_r0.clone()], use_entropy=self.use_entropy_lar, topk=self.lrot_topk)
-                dual_lar_loss = (dual_lar_loss1 + dual_lar_loss2) / 2
-                dual_lar_acc1 = (dual_lar_acc11 + dual_lar_acc12) / 2
+            if do_local_rotation:
+                dual_lar_loss, dual_lar_acc1 = self.do_dual_lar([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=True, use_anti_weights=False)
                 self.log("dual_lar_loss", dual_lar_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lar_acc1", dual_lar_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lar_loss = dual_lar_loss
 
-                if lr_loss == None:
-                    lr_loss = lar_loss*self.lar_weight
-                else:
-                    lr_loss += lar_loss*self.lar_weight
-
-            if self.lrr_weight>0:
-                # print('lrr')
-                """
-                    局部相对自转模块
-                """
-                dual_lrr_loss1, dual_lrr_acc11 = self.do_dual_lrr([dense_rot0.clone(), dense_rot1.clone()], [rot_label_r0.clone(), rot_label_r1.clone()], use_entropy=False)
-                dual_lrr_loss2, dual_lrr_acc12 = self.do_dual_lrr([dense_rot1.clone(), dense_rot0.clone()], [rot_label_r1.clone(), rot_label_r0.clone()], use_entropy=False)
-                dual_lrr_loss = (dual_lrr_loss1 + dual_lrr_loss2) / 2
-                dual_lrr_acc1 = (dual_lrr_acc11 + dual_lrr_acc12) / 2
+                dual_lrr_loss, dual_lrr_acc1 = self.do_dual_lrr([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
                 self.log("dual_lrr_loss", dual_lrr_loss, on_epoch=True, on_step=False, sync_dist=True)
                 self.log("dual_lrr_acc1", dual_lrr_acc1, on_epoch=True, on_step=False, sync_dist=True)
                 lrr_loss = dual_lrr_loss
 
-                if lr_loss == None:
-                    lr_loss = lrr_loss*self.lrr_weight
-                else:
-                    lr_loss += lrr_loss*self.lrr_weight
+                # lr_loss = 0.4*lar_loss + 0.1*lrr_loss
+                # lr_loss = lar_loss
+                lr_loss = 1*lrr_loss
 
-            if self.arev_weight>0:
-                # print('arev')
-                """
-                    绝对公转模块
-                """
-                dual_arev_loss, dual_arev_acc1 = self.do_dual_arev([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=self.use_entropy_arev)
-                self.log("dual_arev_loss", dual_arev_loss, on_epoch=True, on_step=False, sync_dist=True)
-                self.log("dual_arev_acc1", dual_arev_acc1, on_epoch=True, on_step=False, sync_dist=True)
-                arev_loss = dual_arev_loss
+            if do_local_revolution:
+                dual_larv_loss, dual_larv_acc1 = self.do_solo_lrv([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False, use_anti_weights=False)
+                self.log("dual_lrv_loss", dual_larv_loss, on_epoch=True, on_step=False, sync_dist=True)
+                self.log("dual_lrv_acc1", dual_larv_acc1, on_epoch=True, on_step=False, sync_dist=True)
+                lrv_loss = dual_larv_loss
 
-                if rev_loss == None:
-                    rev_loss = arev_loss*self.arev_weight
-                else:
-                    rev_loss += arev_loss*self.arev_weight
-
-            if self.rrev_weight>0:
-                # print('rrev')
-                """
-                    相对公转模块
-                """
-                dual_rrev_loss, dual_rrev_acc1 = self.do_dual_rrev([dense_rot0, dense_rot1], [rot_label_r0, rot_label_r1], use_entropy=False)
-                self.log("dual_rrev_loss", dual_rrev_loss, on_epoch=True, on_step=False, sync_dist=True)
-                self.log("dual_rrev_acc1", dual_rrev_acc1, on_epoch=True, on_step=False, sync_dist=True)
-                rrev_loss = dual_rrev_loss
-
-                if rev_loss == None:
-                    rev_loss = rrev_loss*self.rrev_weight
-                else:
-                    rev_loss += rrev_loss*self.rrev_weight
-
-
-            # 这里还可以加gr，lr，rev任务间的权重
             if gr_loss != None:
                 if rotation_loss == None:
                     rotation_loss = gr_loss
                 else:
                     rotation_loss += gr_loss
-
             if lr_loss != None:
                 if rotation_loss == None:
                     rotation_loss = lr_loss
                 else:
                     rotation_loss += lr_loss
-            if rev_loss != None:
+            if lrv_loss != None:
                 if rotation_loss == None:
-                    rotation_loss = rev_loss
+                    rotation_loss = lrv_loss
                 else:
-                    rotation_loss += rev_loss
+                    rotation_loss += lrv_loss
 
-            # 向总loss中加入旋转模块的loss
+            # moco默认学习率0.3，但是旋转任务在学习率0.15左右才开始收敛，所以这里加个0.5权重
             total_loss = total_loss + rotation_loss
 
-        if self.moco_weight>0:
-            # print("do_moco")
+        if do_moco:
             q1 = self.projector(feats1)
             q2 = self.projector(feats2)
             q1 = F.normalize(q1, dim=-1)
@@ -867,7 +745,11 @@ class AR_Rotation_MoCoV2Plus(BaseMomentumMethod):
                 keys = torch.stack((gather(k1), gather(k2)))
                 self._dequeue_and_enqueue(keys)
 
-            total_loss = total_loss + nce_loss
+            # 解决一开始loss为nan的临时措施
+            if self.current_epoch > 1 and False:
+                total_loss = total_loss + nce_loss
+            else:
+                total_loss = total_loss + 1*nce_loss
 
             self.log("train_nce_loss", nce_loss, on_epoch=True, on_step=False, sync_dist=True)
 

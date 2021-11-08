@@ -4,7 +4,7 @@ python main_pretrain.py \
     --data_dir /data \
     --train_dir ImageNet100/train \
     --val_dir ImageNet100/val \
-    --max_epochs 100 \
+    --max_epochs 200 \
     --gpus 0,1 \
     --accelerator ddp \
     --sync_batchnorm \
@@ -34,17 +34,17 @@ python main_pretrain.py \
     --base_tau_momentum 0.99 \
     --final_tau_momentum 0.999 \
     --momentum_classifier \
-    --moco_weight 0 \
-    --rotation_weight 1 \
-    --gar_weight 0.5 \
-    --use_entropy_gar 1 \
+    --do_moco False \
+    --do_rotatation True \
+    --gar_weight 0 \
+    --use_entropy_gar True \
     --grr_weight 0 \
-    --lar_weight 0 \
-    --use_entropy_lar 1 \
+    --lar_weight 0.5 \
+    --use_entropy_lar True \
     --dense_split 7 \
     --dense_feats_dim 128\
     --lrot_topk 25 \
     --lrr_weight 0 \
     --arev_weight 0 \
     --rrev_weight 0 \
-    --use_entropy_arev 1 \
+    --use_entropy_arev True \
